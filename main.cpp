@@ -21,6 +21,7 @@ int main( int argc, char** argv )
     for(const Eigen::Matrix<P,3,1>& p_w : prog.trajectory_w)
     {
         heightmap.Mill(p_w);
+//        break;
     }
 
     pangolin::CreateWindowAndBind("Main",640,480);
@@ -44,13 +45,18 @@ int main( int argc, char** argv )
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         d_cam.Activate(s_cam);
         
-        // Render OpenGL Teapot
-        pangolin::glDrawColouredCube();
-
+        // Trajectory
         glColor3f(1.0f,0.0f,0.0f);
         glVertexPointer(3, GL_FLOAT, 0, &prog.trajectory_w[0][0]);
         glEnableClientState(GL_VERTEX_ARRAY);
         glDrawArrays(GL_LINE_STRIP, 0, prog.trajectory_w.size());
+        glDisableClientState(GL_VERTEX_ARRAY);
+
+        // Surface
+        glColor3f(0.0f,0.0f,1.0f);
+        glVertexPointer(3, GL_FLOAT, 0, &heightmap.surface(0,0)[0]);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glDrawArrays(GL_POINTS, 0, heightmap.surface.rows() * heightmap.surface.cols());
         glDisableClientState(GL_VERTEX_ARRAY);
 
         
