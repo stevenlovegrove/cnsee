@@ -1,4 +1,5 @@
 #include <pangolin/pangolin.h>
+#include <pangolin/gl/glvbo.h>
 
 #include "GcodeProgram.h"
 #include "Heightmap.h"
@@ -14,14 +15,10 @@ int main( int argc, char** argv )
     const std::string filename = argv[1];
     cnsee::GcodeProgram<P> prog = cnsee::ParseFile<P>(filename);
 
-    std::cout << prog.bounds_mm.min().transpose() << std::endl;
-    std::cout << prog.bounds_mm.max().transpose() << std::endl;
-
     cnsee::Heightmap<P> heightmap(prog.bounds_mm);
     for(const Eigen::Matrix<P,3,1>& p_w : prog.trajectory_w)
     {
         heightmap.Mill(p_w);
-//        break;
     }
 
     pangolin::CreateWindowAndBind("Main",640,480);
@@ -38,6 +35,16 @@ int main( int argc, char** argv )
     pangolin::View& d_cam = pangolin::CreateDisplay()
             .SetBounds(0.0, 1.0, 0.0, 1.0, -640.0f/480.0f)
             .SetHandler(&handler);
+
+    pangolin::GlBuffer trajectory_vbo(pangolin::GlArrayBuffer, prog.trajectory_w.size(), GL_FLOAT, 3);
+    pangolin::GlBuffer surface_vbo(pangolin::GlArrayBuffer, heightmap.surface.rows() * heightmap.surface.cols(), GL_FLOAT, 3);
+    pangolin::GlBuffer surface_ibo = pangolin::MakeTriangleStripIboForVbo(heightmap.surface.rows(), heightmap.surface.cols());
+
+    trajectory_vbo.Upload(&prog.trajectory_w[0][0], prog.trajectory_w.size() * sizeof(P) * 3 );
+    surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(P) * 3);
+
+    std::cout << prog.bounds_mm.min().transpose() << " - " << prog.bounds_mm.max().transpose() << " mm." << std::endl;
+    std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
     
     while( !pangolin::ShouldQuit() )
     {
@@ -47,17 +54,16 @@ int main( int argc, char** argv )
         
         // Trajectory
         glColor3f(1.0f,0.0f,0.0f);
-        glVertexPointer(3, GL_FLOAT, 0, &prog.trajectory_w[0][0]);
+        trajectory_vbo.Bind();
+        glVertexPointer(3, GL_FLOAT, 0, 0);
         glEnableClientState(GL_VERTEX_ARRAY);
         glDrawArrays(GL_LINE_STRIP, 0, prog.trajectory_w.size());
         glDisableClientState(GL_VERTEX_ARRAY);
+        trajectory_vbo.Unbind();
 
         // Surface
         glColor3f(0.0f,0.0f,1.0f);
-        glVertexPointer(3, GL_FLOAT, 0, &heightmap.surface(0,0)[0]);
-        glEnableClientState(GL_VERTEX_ARRAY);
-        glDrawArrays(GL_POINTS, 0, heightmap.surface.rows() * heightmap.surface.cols());
-        glDisableClientState(GL_VERTEX_ARRAY);
+        pangolin::RenderVboIbo(surface_vbo, surface_ibo, true);
 
         
         // Swap frames and Process Events
