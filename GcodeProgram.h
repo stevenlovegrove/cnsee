@@ -9,13 +9,6 @@
 namespace cnsee
 {
 
-struct GcodeCmd
-{
-    unsigned char letter;
-    unsigned int  code;
-    std::map<unsigned char,double> params;
-};
-
 void ConsumeComments(std::istream& is)
 {
     // TODO: This wont handle multiple nested brackets.
@@ -31,7 +24,16 @@ void ConsumeWhitespace(std::istream& is)
     while (is.good() && std::isspace(is.peek())) is.get();
 }
 
-std::istream& operator>>(std::istream& is, GcodeCmd& cmd)
+template<typename T>
+struct GcodeCmd
+{
+    unsigned char letter;
+    unsigned int  code;
+    std::map<unsigned char,T> params;
+};
+
+template<typename T>
+std::istream& operator>>(std::istream& is, GcodeCmd<T>& cmd)
 {
     ConsumeWhitespace(is);
     ConsumeComments(is);
@@ -44,7 +46,7 @@ std::istream& operator>>(std::istream& is, GcodeCmd& cmd)
 
     while(is.good()) {
         unsigned char c;
-        double v;
+        T v;
         is >> c;
         is >> v;
         if(!is.fail()) {
@@ -58,20 +60,22 @@ std::istream& operator>>(std::istream& is, GcodeCmd& cmd)
     return is;
 }
 
-void FillCoords(Eigen::Vector3d& p_w, const std::map<unsigned char,double>& params)
+template<typename T>
+void FillCoords(Eigen::Matrix<T,3,1>& p_w, const std::map<unsigned char,T>& params)
 {
     const int num_axis = 3;
     const unsigned char axis[num_axis] = {'X','Y','Z'};
     for(int i=0; i<num_axis; ++i) {
-        std::map<unsigned char,double>::const_iterator it = params.find(axis[i]);
+        typename std::map<unsigned char,T>::const_iterator it = params.find(axis[i]);
         if(it != params.end()) p_w[i] = it->second;
     }
 }
 
+template<typename T>
 class GcodeProgram
 {
 public:
-    GcodeProgram(const Eigen::Vector3d& start = Eigen::Vector3d::Zero())
+    GcodeProgram(const Eigen::Matrix<T,3,1>& start = Eigen::Matrix<T,3,1>::Zero())
         : samples_per_unit(100),
           start_w(start),
           end_w(start)
@@ -79,14 +83,14 @@ public:
         trajectory_w.push_back(start);
     }
 
-    void PushCommand(const GcodeCmd& cmd)
+    void PushCommand(const GcodeCmd<T>& cmd)
     {
         if(cmd.letter == 'G')
         {
             switch (cmd.code) {
             case 0:
             case 1:
-                Eigen::Vector3d p_w = end_w;
+                Eigen::Matrix<T,3,1> p_w = end_w;
                 FillCoords(p_w, cmd.params);
                 AbsLinearMove(p_w);
                 return;
@@ -97,45 +101,46 @@ public:
     }
 
 //protected:
-    void AbsLinearMove(const Eigen::Vector3d& p_w)
+    void AbsLinearMove(const Eigen::Matrix<T,3,1>& p_w)
     {
-        const double dist = (p_w - end_w).norm();
+        const T dist = (p_w - end_w).norm();
         const int samples = std::max(2, (int)std::ceil(dist * samples_per_unit));
         for(int s=0; s < samples; ++s) {
-            const double lambda = (double)s / (double)samples;
+            const T lambda = (T)s / (T)samples;
             SamplePosition(lambda*p_w + (1-lambda)*end_w);
         }
         end_w = p_w;
     }
 
-    void SamplePosition(const Eigen::Vector3d& p_w)
+    void SamplePosition(const Eigen::Matrix<T,3,1>& p_w)
     {
-        bounds_mm.extend(p_w.head<2>());
+        bounds_mm.extend(p_w.template head<2>());
         trajectory_w.push_back( p_w );
     }
 
     double samples_per_unit;
 
     // Start and end positions for the spindle
-    Eigen::Vector3d start_w;
-    Eigen::Vector3d end_w;
+    Eigen::Matrix<T,3,1> start_w;
+    Eigen::Matrix<T,3,1> end_w;
 
-    Eigen::AlignedBox2d bounds_mm;
+    Eigen::AlignedBox<T,2> bounds_mm;
 
     // samples on trajectory, absolute coordinates
-    std::vector<Eigen::Vector3d,Eigen::aligned_allocator<Eigen::Vector3d> > trajectory_w;
-    std::vector<GcodeCmd> cmds;
+    std::vector<Eigen::Matrix<T,3,1>,Eigen::aligned_allocator<Eigen::Matrix<T,3,1> > > trajectory_w;
+    std::vector<GcodeCmd<T> > cmds;
 };
 
-GcodeProgram ParseFile(const std::string& filename)
+template<typename T>
+GcodeProgram<T> ParseFile(const std::string& filename)
 {
     std::ifstream infile(filename);
 
-    GcodeProgram prog;
+    GcodeProgram<T> prog;
 
     std::string line;
     while (std::getline(infile, line)) {
-        GcodeCmd cmd;
+        GcodeCmd<T> cmd;
         std::istringstream iss(line);
         iss >> cmd;
         if(!iss.fail()) {
