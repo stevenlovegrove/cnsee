@@ -13,7 +13,7 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     Heightmap(const Eigen::AlignedBox<T,2>& bounds_mm)
-        : res_per_mm(20.0f)
+        : res_per_mm(50.0f)
     {
         Init(bounds_mm);
     }
@@ -28,6 +28,7 @@ public:
 
         Eigen::Vector2i size_pix = (res_per_mm*bbox_mm.sizes()).template cast<int>();
         surface = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
+        normals = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
         for(int r = 0; r < surface.rows(); ++r) {
             for(int c = 0; c < surface.cols(); ++c) {
                 const T x = (c / res_per_mm) + bbox_mm.min()[0];
@@ -78,6 +79,7 @@ public:
     T res_per_mm;
     Eigen::AlignedBox<T,2> bbox_mm;
     Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic> surface;
+    Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic> normals;
 };
 
 }
