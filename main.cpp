@@ -50,22 +50,12 @@ int main( int argc, char** argv )
     ComputeNormals(heightmap.normals, heightmap.surface);
 
     pangolin::CreateWindowAndBind("Main",640,480);
-    // Setup default OpenGL parameters
-    glHint( GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST );
-    glHint( GL_LINE_SMOOTH_HINT, GL_NICEST );
-    glHint( GL_POLYGON_SMOOTH_HINT, GL_NICEST );
-    glEnable (GL_BLEND);
-    glEnable (GL_LINE_SMOOTH);
     glEnable(GL_DEPTH_TEST);
-    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glLineWidth(1.5);
-    glPixelStorei(GL_PACK_ALIGNMENT,1);
-    glPixelStorei(GL_UNPACK_ALIGNMENT,1);
 
     // Define Projection and initial ModelView matrix
     pangolin::OpenGlRenderState s_cam(
         pangolin::ProjectionMatrix(640,480,420,420,320,240,1,1000),
-        pangolin::ModelViewLookAt(-2,2,-2, 0,0,0, pangolin::AxisY)
+        pangolin::ModelViewLookAt(0,0,100, 0,0,0, pangolin::AxisX)
     );
     
     // Create Interactive View in window
@@ -82,6 +72,7 @@ int main( int argc, char** argv )
 #ifdef HAVE_PNG
     pangolin::FilesMatchingWildcard(shaders_dir + std::string("/matcap/*.png"), matcap_files);
 #endif // HAVE_PNG
+    std::sort(matcap_files.begin(), matcap_files.end());
 
     pangolin::GlBuffer trajectory_vbo(pangolin::GlArrayBuffer, prog.trajectory_w.size(), GL_FLOAT, 3);
     pangolin::GlBuffer surface_vbo(pangolin::GlArrayBuffer, heightmap.surface.rows() * heightmap.surface.cols(), GL_FLOAT, 3);
@@ -109,7 +100,15 @@ int main( int argc, char** argv )
     std::cout << prog.bounds_mm.min().transpose() << " - " << prog.bounds_mm.max().transpose() << " mm." << std::endl;
     std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
     std::cout << matcap_files[0] << std::endl;
-    
+
+    pangolin::Var<bool> show_trajectory("show_trajectory", true);
+    pangolin::Var<bool> show_surface("show_surface", true);
+    pangolin::Var<bool> show_mesh("show_mesh", true);
+
+    pangolin::RegisterKeyPressCallback('t', [&](){show_trajectory = !show_trajectory;});
+    pangolin::RegisterKeyPressCallback('s', [&](){show_surface = !show_surface;});
+    pangolin::RegisterKeyPressCallback('m', [&](){show_mesh = !show_mesh;});
+
     while( !pangolin::ShouldQuit() )
     {
         // Clear screen and activate view to render into
@@ -117,20 +116,23 @@ int main( int argc, char** argv )
         d_cam.Activate(s_cam);
         
         // Trajectory
-        glColor3f(1.0f,0.0f,0.0f);
-        trajectory_vbo.Bind();
-        glVertexPointer(3, GL_FLOAT, 0, 0);
-        glEnableClientState(GL_VERTEX_ARRAY);
-        glDrawArrays(GL_LINE_STRIP, 0, prog.trajectory_w.size());
-        glDisableClientState(GL_VERTEX_ARRAY);
-        trajectory_vbo.Unbind();
+        if(show_trajectory) {
+            glColor3f(1.0f,0.0f,0.0f);
+            trajectory_vbo.Bind();
+            glVertexPointer(3, GL_FLOAT, 0, 0);
+            glEnableClientState(GL_VERTEX_ARRAY);
+            glDrawArrays(GL_LINE_STRIP, 0, prog.trajectory_w.size());
+            glDisableClientState(GL_VERTEX_ARRAY);
+            trajectory_vbo.Unbind();
+        }
 
         // Surface
-        glColor3f(0.0f,0.0f,1.0f);
-        norm_shader.Bind();
-        pangolin::RenderVboIboNbo(surface_vbo, surface_ibo, surface_nbo, true, true);
-        norm_shader.Unbind();
-
+        if(show_surface) {
+            glColor3f(0.0f,0.0f,1.0f);
+            norm_shader.Bind();
+            pangolin::RenderVboIboNbo(surface_vbo, surface_ibo, surface_nbo, show_mesh, true);
+            norm_shader.Unbind();
+        }
         
         // Swap frames and Process Events
         pangolin::FinishFrame();

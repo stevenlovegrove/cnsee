@@ -76,7 +76,7 @@ class GcodeProgram
 {
 public:
     GcodeProgram(const Eigen::Matrix<T,3,1>& start = Eigen::Matrix<T,3,1>::Zero())
-        : samples_per_unit(100),
+        : samples_per_unit(200),
           start_w(start),
           end_w(start)
     {

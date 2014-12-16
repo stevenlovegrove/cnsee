@@ -13,7 +13,7 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     Heightmap(const Eigen::AlignedBox<T,2>& bounds_mm)
-        : res_per_mm(50.0f)
+        : res_per_mm(20.0f)
     {
         Init(bounds_mm);
     }
