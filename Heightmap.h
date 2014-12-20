@@ -7,18 +7,30 @@ namespace cnsee
 {
 
 template<typename T>
+struct Tool
+{
+    Tool(T diameter, T height)
+        : diameter(diameter), height(height)
+    {
+    }
+
+    T diameter;
+    T height;
+};
+
+template<typename T>
 class Heightmap
 {
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-    Heightmap(const Eigen::AlignedBox<T,2>& bounds_mm)
-        : res_per_mm(20.0f)
+    Heightmap(const Eigen::AlignedBox<T,3>& bounds_mm)
+        : res_per_mm(50.0f), tool(3.2, 8.0)
     {
         Init(bounds_mm);
     }
 
-    void Init(const Eigen::AlignedBox<T,2>& bounds_mm)
+    void Init(const Eigen::AlignedBox<T,3>& bounds_mm)
     {
         bbox_mm = bounds_mm;
         bbox_mm.min()[0] -= 2;
@@ -26,7 +38,7 @@ public:
         bbox_mm.max()[0] += 2;
         bbox_mm.max()[1] += 2;
 
-        Eigen::Vector2i size_pix = (res_per_mm*bbox_mm.sizes()).template cast<int>();
+        Eigen::Vector2i size_pix = (res_per_mm*bbox_mm.sizes().template head<2>()).template cast<int>();
         surface = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
         normals = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
         for(int r = 0; r < surface.rows(); ++r) {
@@ -38,20 +50,29 @@ public:
         }
     }
 
+    void Clear(T z = 0.0)
+    {
+        for(int r = 0; r < surface.rows(); ++r) {
+            for(int c = 0; c < surface.cols(); ++c) {
+                surface(r,c)[2] = z;
+            }
+        }
+    }
+
     // Assume V tip for now
     void Mill(const Eigen::Matrix<T,3,1>& p_w)
     {
         // Surface strictly z < max_surface_height_mm
         const T max_surface_height_mm = 0;
-        const T grad = 1.0;
+        const T grad = tool.height / tool.diameter;
         const T max_cut_depth_mm = max_surface_height_mm - p_w[2];
-        const T max_rad_mm = grad * max_cut_depth_mm;
+        const T max_rad_mm = max_cut_depth_mm / grad;
 
-        if(max_rad_mm > 0.0) {
-            const T max_rad_pix = max_rad_mm * res_per_mm;
+        if(max_rad_mm > 0.0 && grad > 0.0) {
+            const T max_rad_pix = max_rad_mm * res_per_mm + 2;
             const T grad_pix = grad / res_per_mm;
 
-            const Eigen::Matrix<T,2,1> center_pix = (p_w.template head<2>() - bbox_mm.min()) * res_per_mm;
+            const Eigen::Matrix<T,2,1> center_pix = (p_w.template head<2>() - bbox_mm.min().template head<2>()) * res_per_mm;
             const Eigen::Matrix<T,2,1> min_pix = center_pix.array() - max_rad_pix;
             const Eigen::Matrix<T,2,1> max_pix = center_pix.array() + max_rad_pix;
 
@@ -77,9 +98,11 @@ public:
     }
 
     T res_per_mm;
-    Eigen::AlignedBox<T,2> bbox_mm;
+    Eigen::AlignedBox<T,3> bbox_mm;
     Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic> surface;
     Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic> normals;
+
+    Tool<T> tool;
 };
 
 }

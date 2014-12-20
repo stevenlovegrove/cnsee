@@ -37,10 +37,10 @@ int main( int argc, char** argv )
         return -1;
     }
 
-    typedef float P;
+    typedef float T;
     const std::string filename = argv[1];
-    cnsee::GcodeProgram<P> prog = cnsee::ParseFile<P>(filename);
-    cnsee::Heightmap<P> heightmap(prog.bounds_mm);
+    cnsee::GcodeProgram<T> prog = cnsee::ParseFile<T>(filename);
+    cnsee::Heightmap<T> heightmap(prog.bounds_mm);
 
     pangolin::CreateWindowAndBind("Main",640,480);
     glEnable(GL_DEPTH_TEST);
@@ -53,8 +53,10 @@ int main( int argc, char** argv )
     
     // Create Interactive View in window
     pangolin::Handler3D handler(s_cam);
+    pangolin::CreatePanel("tool")
+            .SetBounds(0.0, 1.0, 0.0, pangolin::Attach::Pix(180));
     pangolin::View& d_cam = pangolin::CreateDisplay()
-            .SetBounds(0.0, 1.0, 0.0, 1.0, -640.0f/480.0f)
+            .SetBounds(0.0, 1.0, pangolin::Attach::Pix(180), 1.0, -640.0f/480.0f)
             .SetHandler(&handler);
 
     const std::string shaders_dir = pangolin::FindPath(argv[0], "/shaders");
@@ -84,7 +86,7 @@ int main( int argc, char** argv )
     norm_shader.AddShaderFromFile(pangolin::GlSlFragmentShader, shaders_dir + std::string("/matcap.frag"));
     norm_shader.Link();
 
-    std::cout << prog.bounds_mm.min().transpose() << " - " << prog.bounds_mm.max().transpose() << " mm." << std::endl;
+    std::cout << "(" << prog.bounds_mm.min().transpose() << ") - (" << prog.bounds_mm.max().transpose() << ") mm." << std::endl;
     std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
     std::cout << matcap_files[0] << std::endl;
 
@@ -92,20 +94,37 @@ int main( int argc, char** argv )
     pangolin::Var<bool> show_surface("show_surface", true);
     pangolin::Var<bool> show_mesh("show_mesh", true);
 
+    pangolin::Var<float> tool_tip_width_mm("tool.diameter mm", 3.2, 0.0, 5.0);
+    pangolin::Var<float> tool_tip_height_mm("tool.height mm", 8.0, 0.0, 10.0);
+    pangolin::Var<float> tool_v_angle_deg("tool.v angle deg", 40, 0.0, 100.0);
+    pangolin::Var<float> tool_z_offset_mm("tool.z offset mm", 0.0, -1.0, +1.0);
+
     pangolin::RegisterKeyPressCallback('t', [&](){show_trajectory = !show_trajectory;});
     pangolin::RegisterKeyPressCallback('s', [&](){show_surface = !show_surface;});
     pangolin::RegisterKeyPressCallback('m', [&](){show_mesh = !show_mesh;});
 
-    bool changed = false;
+    std::thread mill_thread;
+    bool mill_changed = false;
+    bool mill_abort = false;
 
-    auto do_mill = [&]() {
-        for(const Eigen::Matrix<P,3,1>& p_w : prog.trajectory_w) {
-            heightmap.Mill(p_w);
-            changed = true;
+    auto mill = [&]() {
+        mill_abort = false;
+        heightmap.Clear();
+        const Eigen::Matrix<T,3,1> offset(0.0,0.0,tool_z_offset_mm);
+        for(const Eigen::Matrix<T,3,1>& p_w : prog.trajectory_w) {
+            heightmap.Mill(p_w + offset);
+            mill_changed = true;
+            if(mill_abort) break;
         }
     };
 
-    std::thread mill_thread(do_mill);
+    auto mill_in_thread = [&]() {
+        if(mill_thread.joinable()) {
+            mill_abort = true;
+            mill_thread.join();
+        }
+        mill_thread = std::thread(mill);
+    };
 
     while( !pangolin::ShouldQuit() )
     {
@@ -113,13 +132,26 @@ int main( int argc, char** argv )
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         d_cam.Activate(s_cam);
 
-        if(changed) {
+        if( pangolin::GuiVarHasChanged() ) {
+            if(tool_v_angle_deg.GuiChanged()) {
+                T tool_v_angle_rad = M_PI * tool_v_angle_deg / 180.0;
+                tool_tip_height_mm = tool_tip_width_mm / tan(tool_v_angle_rad / 2.0);
+            }else if(tool_tip_height_mm.GuiChanged()) {
+                T tool_v_angle_rad = 2.0 * atan2(tool_tip_width_mm, tool_tip_height_mm);
+                tool_v_angle_deg = 180.0 * tool_v_angle_rad / M_PI;
+            }
+            heightmap.tool.diameter = tool_tip_width_mm;
+            heightmap.tool.height = tool_tip_height_mm;
+            mill_in_thread();
+        }
+
+        if(mill_changed) {
             // Compute Normals
+            mill_changed = false;
             ComputeNormals(heightmap.normals, heightmap.surface);
-            trajectory_vbo.Upload(&prog.trajectory_w[0][0], prog.trajectory_w.size() * sizeof(P) * 3 );
-            surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(P) * 3);
-            surface_nbo.Upload(&heightmap.normals(0,0)[0], heightmap.normals.rows() * heightmap.normals.cols() * sizeof(P) * 3);
-            changed = false;
+            trajectory_vbo.Upload(&prog.trajectory_w[0][0], prog.trajectory_w.size() * sizeof(T) * 3 );
+            surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(T) * 3);
+            surface_nbo.Upload(&heightmap.normals(0,0)[0], heightmap.normals.rows() * heightmap.normals.cols() * sizeof(T) * 3);
         }
         
         // Trajectory

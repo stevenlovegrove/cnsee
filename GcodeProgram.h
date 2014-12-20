@@ -76,7 +76,7 @@ class GcodeProgram
 {
 public:
     GcodeProgram(const Eigen::Matrix<T,3,1>& start = Eigen::Matrix<T,3,1>::Zero())
-        : samples_per_unit(200),
+        : samples_per_unit(50),
           start_w(start),
           end_w(start)
     {
@@ -114,7 +114,7 @@ public:
 
     void SamplePosition(const Eigen::Matrix<T,3,1>& p_w)
     {
-        bounds_mm.extend(p_w.template head<2>());
+        bounds_mm.extend(p_w);
         trajectory_w.push_back( p_w );
     }
 
@@ -124,7 +124,7 @@ public:
     Eigen::Matrix<T,3,1> start_w;
     Eigen::Matrix<T,3,1> end_w;
 
-    Eigen::AlignedBox<T,2> bounds_mm;
+    Eigen::AlignedBox<T,3> bounds_mm;
 
     // samples on trajectory, absolute coordinates
     std::vector<Eigen::Matrix<T,3,1>,Eigen::aligned_allocator<Eigen::Matrix<T,3,1> > > trajectory_w;
