@@ -1,3 +1,4 @@
+#include <thread>
 #include <pangolin/pangolin.h>
 #include <pangolin/gl/glvbo.h>
 
@@ -39,15 +40,7 @@ int main( int argc, char** argv )
     typedef float P;
     const std::string filename = argv[1];
     cnsee::GcodeProgram<P> prog = cnsee::ParseFile<P>(filename);
-
     cnsee::Heightmap<P> heightmap(prog.bounds_mm);
-    for(const Eigen::Matrix<P,3,1>& p_w : prog.trajectory_w)
-    {
-        heightmap.Mill(p_w);
-    }
-
-    // Compute Normals
-    ComputeNormals(heightmap.normals, heightmap.surface);
 
     pangolin::CreateWindowAndBind("Main",640,480);
     glEnable(GL_DEPTH_TEST);
@@ -81,21 +74,15 @@ int main( int argc, char** argv )
     pangolin::GlTexture matcaptex;
     if(matcap_files.size()) {
         matcaptex.LoadFromFile(matcap_files[0]);
+    }else{
+        std::cerr << "No 'matcap' textures found." << std::endl;
+        return -1;
     }
 
     pangolin::GlSlProgram norm_shader;
     norm_shader.AddShaderFromFile(pangolin::GlSlVertexShader,   shaders_dir + std::string("/matcap.vert"));
     norm_shader.AddShaderFromFile(pangolin::GlSlFragmentShader, shaders_dir + std::string("/matcap.frag"));
     norm_shader.Link();
-
-    norm_shader.Bind();
-//    norm_shader.SetUniform("uTexMatCap", 0);
-    norm_shader.SetUniform("shininess", 0.5f);
-    norm_shader.Unbind();
-
-    trajectory_vbo.Upload(&prog.trajectory_w[0][0], prog.trajectory_w.size() * sizeof(P) * 3 );
-    surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(P) * 3);
-    surface_nbo.Upload(&heightmap.normals(0,0)[0], heightmap.normals.rows() * heightmap.normals.cols() * sizeof(P) * 3);
 
     std::cout << prog.bounds_mm.min().transpose() << " - " << prog.bounds_mm.max().transpose() << " mm." << std::endl;
     std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
@@ -109,11 +96,31 @@ int main( int argc, char** argv )
     pangolin::RegisterKeyPressCallback('s', [&](){show_surface = !show_surface;});
     pangolin::RegisterKeyPressCallback('m', [&](){show_mesh = !show_mesh;});
 
+    bool changed = false;
+
+    auto do_mill = [&]() {
+        for(const Eigen::Matrix<P,3,1>& p_w : prog.trajectory_w) {
+            heightmap.Mill(p_w);
+            changed = true;
+        }
+    };
+
+    std::thread mill_thread(do_mill);
+
     while( !pangolin::ShouldQuit() )
     {
         // Clear screen and activate view to render into
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         d_cam.Activate(s_cam);
+
+        if(changed) {
+            // Compute Normals
+            ComputeNormals(heightmap.normals, heightmap.surface);
+            trajectory_vbo.Upload(&prog.trajectory_w[0][0], prog.trajectory_w.size() * sizeof(P) * 3 );
+            surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(P) * 3);
+            surface_nbo.Upload(&heightmap.normals(0,0)[0], heightmap.normals.rows() * heightmap.normals.cols() * sizeof(P) * 3);
+            changed = false;
+        }
         
         // Trajectory
         if(show_trajectory) {
