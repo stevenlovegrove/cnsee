@@ -13,5 +13,5 @@ include_directories(${Pangolin_INCLUDE_DIRS})
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
 
-add_executable(cnsee main.cpp)
+add_executable(cnsee main.cpp Heightmap.h GcodeProgram.h Machine.h)
 target_link_libraries(cnsee ${Pangolin_LIBRARIES})

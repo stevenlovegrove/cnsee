@@ -4,6 +4,7 @@
 
 #include "GcodeProgram.h"
 #include "Heightmap.h"
+#include "Machine.h"
 
 template<typename T>
 void ComputeNormals(
@@ -39,6 +40,7 @@ int main( int argc, char** argv )
 
     typedef float T;
     const std::string filename = argv[1];
+    const std::string grbl_serial = "/dev/tty.USB0";
     cnsee::GcodeProgram<T> prog = cnsee::ParseFile<T>(filename);
     cnsee::Heightmap<T> heightmap(prog.bounds_mm);
 
@@ -126,6 +128,15 @@ int main( int argc, char** argv )
         mill_thread = std::thread(mill);
     };
 
+    // Connect to machine
+    GerblMachine machine;
+
+    try{
+        machine.Open(grbl_serial);
+    }catch(...) {
+
+    }
+
     while( !pangolin::ShouldQuit() )
     {
         // Clear screen and activate view to render into
@@ -175,6 +186,11 @@ int main( int argc, char** argv )
         
         // Swap frames and Process Events
         pangolin::FinishFrame();
+    }
+
+    if(mill_thread.joinable()) {
+        mill_abort = true;
+        mill_thread.join();
     }
     
     return 0;
