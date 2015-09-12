@@ -8,7 +8,42 @@
 #include <string.h>
 #include <queue>
 
+std::vector<std::string>& Split(const std::string& s, char delim, std::vector<std::string>& elements) {
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, delim)) {
+        elements.push_back(item);
+    }
+    return elements;
+}
+
+std::vector<std::string> Split(const std::string &s, char delim) {
+    std::vector<std::string> elems;
+    return Split(s, delim, elems);
+}
+
+namespace Eigen
+{
+    inline std::istream& operator>>( std::istream& is, Eigen::Vector3d& mat)
+    {
+        size_t rows = mat.rows();
+        for( size_t r = 0; r < rows-1; r++ ) {
+            is >> mat[r];
+            is.get();
+        }
+        is >> mat[rows-1];
+        return is;
+    }
+}
+
 namespace cnsee {
+    enum MachineStatus {
+        Disconnected,
+        Unknown,
+        Idle,
+        Running,
+        Alarm
+    };
 
     class Machine {
     public:
@@ -29,7 +64,7 @@ namespace cnsee {
                   buffer(new char[max_buffer_size]),
                   parse_start(buffer.get()),
                   parse_end(parse_start),
-                  grbl_ready(false),
+                  status(Disconnected),
                   cmd_size_outstanding(0)
         {
         }
@@ -75,9 +110,12 @@ namespace cnsee {
 //                if(!should_run) return;
             }
 
-            // Add to cmd buffer size 'in transit'
-            cmd_size_outstanding += size;
-            cmd_size_queue.push(size);
+            {
+                std::unique_lock<std::mutex> lock(cmd_queue_mutex);
+                // Add to cmd buffer size 'in transit'
+                cmd_size_outstanding += size;
+                cmd_size_queue.push(size);
+            }
 
             size_t num_written = 0;
             while (should_run && num_written < size) {
@@ -94,11 +132,12 @@ namespace cnsee {
 //            SendLine(...)
         }
 
-        void Status()
+        void RequestStatus()
         {
-            SendLine("?");
+            if(status != Disconnected) {
+                SendLine("?");
+            }
         }
-
 
     private:
         void ClearBuffer() {
@@ -108,6 +147,8 @@ namespace cnsee {
 
         void QueueResponse(bool success)
         {
+            std::unique_lock<std::mutex> lock(cmd_queue_mutex);
+
             if(cmd_size_queue.size() > 0) {
                 size_t size = cmd_size_queue.front();
                 cmd_size_queue.pop();
@@ -120,25 +161,59 @@ namespace cnsee {
             }
         }
 
+        bool ParseStatus(char *start, char *end) {
+            char* end_status = std::find(start, end, ',');
+            if(end_status == end) return false;
+
+            std::string str_status(start+1, end_status);
+            if( !str_status.compare(0,4,"Idle") ) {
+                status = Idle;
+            }else if( !str_status.compare(0,3,"Run") ) {
+                status = Running;
+            }else if( !str_status.compare(0,4,"Alarm") ) {
+                status = Alarm;
+            }else{
+                status = Unknown;
+            }
+
+            char* m_pos = std::find(end_status+1, end, 'M');
+            char* w_pos = std::find(end_status+1, end, 'W');
+            if(m_pos == end || w_pos == end ) return false;
+
+            std::string str_mpos(m_pos +5, w_pos -1);
+            std::string str_wpos(w_pos +5, end-1);
+
+            mpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(str_mpos);
+            wpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(str_wpos);
+
+            std::cout << mpos.transpose() << std::endl;
+            std::cout << wpos.transpose() << std::endl;
+            return true;
+        }
+
         void ParseLine(char *start, char *end) {
-            size_t size = end - start;
+            ssize_t size = end - start;
             if (size > 0) {
                 if (start[0] == '[') {
                     std::cout << "feedback: " << std::string(start, end) << std::endl;
                 } else if (start[0] == '<') {
-                    std::cout << "status: " << std::string(start, end) << std::endl;
+                    ParseStatus(start, end);
+//                    std::cout << "status: " << std::string(start, end) << std::endl;
                     QueueResponse(true);
                 } else if (size > 4 && !strncmp(start, "Grbl", 4)) {
-                    grbl_ready = true;
+                    status = Unknown;
                     std::cout << "Grbl connection established." << std::endl;
                 } else if (size == 2 && !strncmp(start, "ok", size)) {
                     QueueResponse(true);
                 } else if (size > 5 && !strncmp(start, "error", 5)) {
                     QueueResponse(false);
                     std::cout << std::string(start, end) << std::endl;
+                } else if (start[0] == '\r' || start[0] == '\n') {
+                    ParseLine(start+1, end);
                 } else {
                     std::cout << "other: (" << (int) start[0] << ", len " << end - start << ") " <<
                     std::string(start, end) << std::endl;
+                    exit(-1);
                 }
             }
         }
@@ -156,7 +231,10 @@ namespace cnsee {
                     char *newln = std::find(parse_start, parse_end, '\r');
                     while (newln != parse_end) {
                         ParseLine(parse_start, newln);
-                        parse_start = newln + 2; // consume '\r\n'
+                        parse_start = newln + 1;
+                        while(parse_start < parse_end && (parse_start[0] == '\r' || parse_start[0] == '\n') ) {
+                            ++parse_start;
+                        }
                         newln = std::find(parse_start, parse_end, '\r');
                     }
                     if (parse_start == parse_end) {
@@ -178,6 +256,7 @@ namespace cnsee {
 
         volatile bool should_run;
 
+        std::mutex cmd_queue_mutex;
         std::thread read_thread;
         std::thread write_thread;
         SerialPort serial;
@@ -187,10 +266,13 @@ namespace cnsee {
         char *parse_start;
         char *parse_end;
 
-        volatile bool grbl_ready;
+        volatile MachineStatus status;
 
         std::queue<size_t> cmd_size_queue;
         volatile ssize_t cmd_size_outstanding;
+
+        Eigen::Vector3d wpos;
+        Eigen::Vector3d mpos;
     };
 
 }

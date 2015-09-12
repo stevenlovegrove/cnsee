@@ -145,9 +145,10 @@ int main( int argc, char** argv )
         machine.SendLine("G91 G0  Y10\n");
     });
     pangolin::Var<std::function<void()> > gcode_status("tool.status", [&](){
-        machine.Status();
+        machine.RequestStatus();
     });
 
+    size_t frame = 0;
     while( !pangolin::ShouldQuit() )
     {
         // Clear screen and activate view to render into
@@ -194,8 +195,11 @@ int main( int argc, char** argv )
             pangolin::RenderVboIboNbo(surface_vbo, surface_ibo, surface_nbo, show_mesh, true);
             norm_shader.Unbind();
         }
-        
-        // Swap frames and Process Events
+
+        if(frame%12 == 0) {
+            machine.RequestStatus();
+        }
+        ++frame;
         pangolin::FinishFrame();
     }
 
