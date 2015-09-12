@@ -77,6 +77,7 @@ int main( int argc, char** argv )
     pangolin::GlBuffer surface_ibo = pangolin::MakeTriangleStripIboForVbo(heightmap.surface.rows(), heightmap.surface.cols());
     pangolin::GlTexture matcaptex;
     if(matcap_files.size()) {
+        std::cout << "Using matcap texture: " << matcap_files[0] << std::endl;
         matcaptex.LoadFromFile(matcap_files[0]);
     }else{
         std::cerr << "No 'matcap' textures found." << std::endl;
@@ -178,8 +179,8 @@ int main( int argc, char** argv )
 
         // Surface
         if(show_surface) {
-            glColor3f(0.0f,0.0f,1.0f);
             norm_shader.Bind();
+            matcaptex.Bind();
             pangolin::RenderVboIboNbo(surface_vbo, surface_ibo, surface_nbo, show_mesh, true);
             norm_shader.Unbind();
         }
