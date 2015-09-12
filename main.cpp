@@ -61,7 +61,7 @@ int main( int argc, char** argv )
             .SetBounds(0.0, 1.0, pangolin::Attach::Pix(180), 1.0, -640.0f/480.0f)
             .SetHandler(&handler);
 
-    const std::string shaders_dir = pangolin::FindPath(argv[0], "/shaders");
+    const std::string shaders_dir = pangolin::FindPath(".", "/shaders");
     std::vector<std::string> matcap_files;
 #ifdef HAVE_JPEG
     pangolin::FilesMatchingWildcard(shaders_dir + std::string("/matcap/*.jpg"), matcap_files);
@@ -93,14 +93,14 @@ int main( int argc, char** argv )
     std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
     std::cout << matcap_files[0] << std::endl;
 
-    pangolin::Var<bool> show_trajectory("show_trajectory", true);
-    pangolin::Var<bool> show_surface("show_surface", true);
-    pangolin::Var<bool> show_mesh("show_mesh", true);
+    pangolin::Var<bool> show_trajectory("tool.show_trajectory", true, true);
+    pangolin::Var<bool> show_surface("tool.show_surface", true, true);
+    pangolin::Var<bool> show_mesh("tool.show_mesh", true, true);
 
-    pangolin::Var<float> tool_tip_width_mm("tool.diameter mm", 3.2, 0.0, 5.0);
-    pangolin::Var<float> tool_tip_height_mm("tool.height mm", 8.0, 0.0, 10.0);
-    pangolin::Var<float> tool_v_angle_deg("tool.v angle deg", 40, 0.0, 100.0);
-    pangolin::Var<float> tool_z_offset_mm("tool.z offset mm", 0.0, -1.0, +1.0);
+    pangolin::Var<float> tool_tip_width_mm("tool.diameter_mm", 3.2, 0.0, 5.0);
+    pangolin::Var<float> tool_tip_height_mm("tool.height_mm", 8.0, 0.0, 10.0);
+    pangolin::Var<float> tool_v_angle_deg("tool.v_angle_deg", 40, 0.0, 100.0);
+    pangolin::Var<float> tool_z_offset_mm("tool.z_offset_mm", 0.0, -1.0, +1.0);
 
     pangolin::RegisterKeyPressCallback('t', [&](){show_trajectory = !show_trajectory;});
     pangolin::RegisterKeyPressCallback('s', [&](){show_surface = !show_surface;});
@@ -113,7 +113,7 @@ int main( int argc, char** argv )
     auto mill = [&]() {
         mill_abort = false;
         heightmap.Clear();
-        const Eigen::Matrix<T,3,1> offset(0.0,0.0,tool_z_offset_mm);
+        const Eigen::Matrix<T,3,1> offset(0.0, 0.0, tool_z_offset_mm);
         for(const Eigen::Matrix<T,3,1>& p_w : prog.trajectory_w) {
             heightmap.Mill(p_w + offset);
             mill_changed = true;

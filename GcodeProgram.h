@@ -9,17 +9,21 @@
 namespace cnsee
 {
 
-void ConsumeComments(std::istream& is)
+inline void ConsumeComments(std::istream& is)
 {
     // TODO: This wont handle multiple nested brackets.
-    if(is.good() && is.peek() == '(') {
-        is.get();
-        while(is.peek() != ')') is.get();
-        is.get();
+    if(is.good() ) {
+        if( is.peek() == '(') {
+            is.get();
+            while(is.peek() != ')') is.get();
+            is.get();
+        }else if( is.peek() == '%') {
+            while(is.good()) is.get();
+        }
     }
 }
 
-void ConsumeWhitespace(std::istream& is)
+inline void ConsumeWhitespace(std::istream& is)
 {
     while (is.good() && std::isspace(is.peek())) is.get();
 }
@@ -76,7 +80,7 @@ class GcodeProgram
 {
 public:
     GcodeProgram(const Eigen::Matrix<T,3,1>& start = Eigen::Matrix<T,3,1>::Zero())
-        : samples_per_unit(50),
+        : samples_per_unit(100),
           start_w(start),
           end_w(start)
     {
@@ -107,7 +111,7 @@ public:
         const int samples = std::max(2, (int)std::ceil(dist * samples_per_unit));
         for(int s=0; s < samples; ++s) {
             const T lambda = (T)s / (T)samples;
-            SamplePosition(lambda*p_w + (1-lambda)*end_w);
+            SamplePosition((1-lambda)*end_w + lambda*p_w);
         }
         end_w = p_w;
     }
