@@ -146,7 +146,7 @@ public:
         }
     }
 
-    ssize_t Write(unsigned char* buffer, size_t num_bytes)
+    ssize_t Write(const unsigned char* buffer, size_t num_bytes)
     {
         return write(fd, buffer, num_bytes);
     }
@@ -165,10 +165,6 @@ public:
 
         // Wait up to timeout until data input available.
         const int res = select(fd + 1, &fds, NULL, NULL, &timeout);
-
-        if (res == 0) {
-            std::cerr << "Read timeout" << std::endl;
-        }
 
         return res > 0;
     }

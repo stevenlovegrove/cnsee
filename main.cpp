@@ -40,7 +40,9 @@ int main( int argc, char** argv )
 
     typedef float T;
     const std::string filename = argv[1];
-    const std::string grbl_serial = "/dev/tty.USB0";
+//    const std::string grbl_serial = "/dev/tty.USB0";
+    const std::string grbl_serial = "/dev/tty.usbserial-A9ORBH5T";
+
     cnsee::GcodeProgram<T> prog = cnsee::ParseFile<T>(filename);
     cnsee::Heightmap<T> heightmap(prog.bounds_mm);
 
@@ -102,10 +104,6 @@ int main( int argc, char** argv )
     pangolin::Var<float> tool_v_angle_deg("tool.v_angle_deg", 40, 0.0, 100.0);
     pangolin::Var<float> tool_z_offset_mm("tool.z_offset_mm", 0.0, -1.0, +1.0);
 
-    pangolin::RegisterKeyPressCallback('t', [&](){show_trajectory = !show_trajectory;});
-    pangolin::RegisterKeyPressCallback('s', [&](){show_surface = !show_surface;});
-    pangolin::RegisterKeyPressCallback('m', [&](){show_mesh = !show_mesh;});
-
     std::thread mill_thread;
     bool mill_changed = false;
     bool mill_abort = false;
@@ -130,13 +128,25 @@ int main( int argc, char** argv )
     };
 
     // Connect to machine
-    GerblMachine machine;
+    cnsee::GerblMachine machine;
 
     try{
         machine.Open(grbl_serial);
     }catch(...) {
-
+        std::cerr << "Unable to connect to machine." << std::endl;
     }
+
+
+    pangolin::RegisterKeyPressCallback('t', [&](){show_trajectory = !show_trajectory;});
+    pangolin::RegisterKeyPressCallback('s', [&](){show_surface = !show_surface;});
+    pangolin::RegisterKeyPressCallback('m', [&](){show_mesh = !show_mesh;});
+
+    pangolin::Var<std::function<void()> > gcode_x_plus("tool.x_plus", [&](){
+        machine.SendLine("G91 G0  Y10\n");
+    });
+    pangolin::Var<std::function<void()> > gcode_status("tool.status", [&](){
+        machine.Status();
+    });
 
     while( !pangolin::ShouldQuit() )
     {
