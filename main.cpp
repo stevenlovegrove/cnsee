@@ -1,6 +1,6 @@
 #include <thread>
+
 #include <pangolin/pangolin.h>
-#include <pangolin/gl/glvbo.h>
 
 #include "GcodeProgram.h"
 #include "Heightmap.h"
@@ -52,7 +52,7 @@ int main( int argc, char** argv )
     // Define Projection and initial ModelView matrix
     pangolin::OpenGlRenderState s_cam(
         pangolin::ProjectionMatrix(640,480,420,420,320,240,1,1000),
-        pangolin::ModelViewLookAt(0,0,100, 0,0,0, pangolin::AxisX)
+        pangolin::ModelViewLookAt(0,0,100, 0,0,0, pangolin::AxisY)
     );
     
     // Create Interactive View in window
@@ -98,11 +98,14 @@ int main( int argc, char** argv )
     pangolin::Var<bool> show_trajectory("tool.show_trajectory", true, true);
     pangolin::Var<bool> show_surface("tool.show_surface", true, true);
     pangolin::Var<bool> show_mesh("tool.show_mesh", true, true);
+    pangolin::Var<bool> show_endmill("tool.show_endmill", true, true);
 
     pangolin::Var<float> tool_tip_width_mm("tool.diameter_mm", 3.2, 0.0, 5.0);
     pangolin::Var<float> tool_tip_height_mm("tool.height_mm", 8.0, 0.0, 10.0);
     pangolin::Var<float> tool_v_angle_deg("tool.v_angle_deg", 40, 0.0, 100.0);
     pangolin::Var<float> tool_z_offset_mm("tool.z_offset_mm", 0.0, -1.0, +1.0);
+
+    pangolin::Var<bool> hard_limits("tool.hard_limits", true, true);
 
     std::thread mill_thread;
     bool mill_changed = false;
@@ -136,16 +139,20 @@ int main( int argc, char** argv )
         std::cerr << "Unable to connect to machine." << std::endl;
     }
 
-
-    pangolin::RegisterKeyPressCallback('t', [&](){show_trajectory = !show_trajectory;});
-    pangolin::RegisterKeyPressCallback('s', [&](){show_surface = !show_surface;});
-    pangolin::RegisterKeyPressCallback('m', [&](){show_mesh = !show_mesh;});
+    const double step = 10.0;
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_UP,    [&](){ machine.MoveRel(Eigen::Vector3d(0,+step,0));});
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_DOWN,  [&](){ machine.MoveRel(Eigen::Vector3d(0,-step,0));});
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_RIGHT, [&](){ machine.MoveRel(Eigen::Vector3d(+step,0,0));});
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_LEFT,  [&](){ machine.MoveRel(Eigen::Vector3d(-step,0,0));});
 
     pangolin::Var<std::function<void()> > gcode_x_plus("tool.x_plus", [&](){
         machine.SendLine("G91 G0  Y10\n");
     });
-    pangolin::Var<std::function<void()> > gcode_status("tool.status", [&](){
-        machine.RequestStatus();
+    pangolin::Var<std::function<void()> >("tool.unlock", [&](){
+        machine.SendLine("$X\n");
+    });
+    pangolin::Var<std::function<void()> >("tool.home", [&](){
+        machine.SendLine("$H\n");
     });
 
     size_t frame = 0;
@@ -166,6 +173,10 @@ int main( int argc, char** argv )
             heightmap.tool.diameter = tool_tip_width_mm;
             heightmap.tool.height = tool_tip_height_mm;
             mill_in_thread();
+        }
+
+        if(hard_limits.GuiChanged()) {
+            machine.SetHardLimits(hard_limits);
         }
 
         if(mill_changed) {
@@ -196,7 +207,14 @@ int main( int argc, char** argv )
             norm_shader.Unbind();
         }
 
-        if(frame%12 == 0) {
+        if(show_endmill) {
+            glPushMatrix();
+            glTranslated(machine.mpos[0],machine.mpos[1],machine.mpos[2]);
+            pangolin::glDrawAxis(10.0);
+            glPopMatrix();
+        }
+
+        if(frame%6 == 0) {
             machine.RequestStatus();
         }
         ++frame;

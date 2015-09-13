@@ -54,6 +54,7 @@ namespace cnsee {
 
     class GerblMachine : public Machine {
     public:
+
         typedef GCodeCmd<double> GCodeCmdT;
 
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -99,7 +100,7 @@ namespace cnsee {
             return GRBL_RX_BUFFER_SIZE - cmd_size_outstanding;
         }
 
-        void SendLine(const unsigned char *gcode, size_t size) {
+        void SendLine(const char *gcode, size_t size) {
             if(size > GRBL_RX_BUFFER_SIZE) {
                 throw std::runtime_error("Command is greater than GRBL_RX_BUFFER_SIZE");
             }
@@ -119,17 +120,16 @@ namespace cnsee {
 
             size_t num_written = 0;
             while (should_run && num_written < size) {
-                num_written += serial.Write(gcode, size);
+                num_written += serial.Write((unsigned char*) gcode, size);
             }
         }
 
-        void SendLine(const std::string &gcode) {
-            SendLine((const unsigned char *) gcode.c_str(), gcode.size());
+        void SendLine(const char *gcode) {
+            SendLine(gcode, strlen(gcode));
         }
 
-        void SendGCode(GCodeCmdT cmd)
-        {
-//            SendLine(...)
+        void SendLine(const std::string &gcode) {
+            SendLine(gcode.c_str(), gcode.size());
         }
 
         void RequestStatus()
@@ -139,7 +139,52 @@ namespace cnsee {
             }
         }
 
+        void MoveRel(const Eigen::Vector3d& v)
+        {
+            char buffer[1024];
+            snprintf(buffer,1024,"G91 X%f Y%f Z%f\n", v[0], v[1], v[2]);
+            SendLine(buffer);
+        }
+
+        void MoveTo(const Eigen::Vector3d& v)
+        {
+            char buffer[1024];
+            snprintf(buffer,1024,"G0 X%f Y%f Z%f\n", v[0], v[1], v[2]);
+            SendLine(buffer);
+        }
+
+        void MoveQuickTo(const Eigen::Vector3d& v)
+        {
+            char buffer[1024];
+            snprintf(buffer,1024,"G1 X%f Y%f Z%f\n", v[0], v[1], v[2]);
+            SendLine(buffer);
+        }
+
+        void SetHardLimits(bool enable)
+        {
+            if(enable) {
+                SendLine("$21=1\n");
+            }else{
+                SendLine("$21=0\n");
+            }
+        }
+
+        void SetUnits_mm()
+        {
+            SendLine("G21\n");
+        }
+
+        void Unlock()
+        {
+            SendLine("$X\n");
+        }
+
+
+        Eigen::Vector3d wpos;
+        Eigen::Vector3d mpos;
+
     private:
+
         void ClearBuffer() {
             parse_start = buffer.get();
             parse_end = parse_start;
@@ -170,7 +215,7 @@ namespace cnsee {
                 status = Idle;
             }else if( !str_status.compare(0,3,"Run") ) {
                 status = Running;
-            }else if( !str_status.compare(0,4,"Alarm") ) {
+            }else if( !str_status.compare(0,5,"Alarm") ) {
                 status = Alarm;
             }else{
                 status = Unknown;
@@ -185,10 +230,17 @@ namespace cnsee {
 
             mpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(str_mpos);
             wpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(str_wpos);
-
-            std::cout << mpos.transpose() << std::endl;
-            std::cout << wpos.transpose() << std::endl;
             return true;
+        }
+
+        void MachineConnected()
+        {
+            std::cout << "Grbl connection established." << std::endl;
+            status = Unknown;
+
+            Unlock();
+            SetUnits_mm();
+            SetHardLimits(true);
         }
 
         void ParseLine(char *start, char *end) {
@@ -200,13 +252,14 @@ namespace cnsee {
                     ParseStatus(start, end);
 //                    std::cout << "status: " << std::string(start, end) << std::endl;
                     QueueResponse(true);
-                } else if (size > 4 && !strncmp(start, "Grbl", 4)) {
-                    status = Unknown;
-                    std::cout << "Grbl connection established." << std::endl;
-                } else if (size == 2 && !strncmp(start, "ok", size)) {
+                } else if (size >= 4 && !strncmp(start, "Grbl", 4)) {
+                    MachineConnected();
+                } else if (size == 2 && !strncmp(start, "ok", 2)) {
                     QueueResponse(true);
-                } else if (size > 5 && !strncmp(start, "error", 5)) {
+                } else if (size >= 5 && !strncmp(start, "error", 5)) {
                     QueueResponse(false);
+                    std::cout << std::string(start, end) << std::endl;
+                } else if (size >= 5 && !strncmp(start, "ALARM", 5)) {
                     std::cout << std::string(start, end) << std::endl;
                 } else if (start[0] == '\r' || start[0] == '\n') {
                     ParseLine(start+1, end);
@@ -255,24 +308,21 @@ namespace cnsee {
         const static size_t GRBL_RX_BUFFER_SIZE = 127;
 
         volatile bool should_run;
-
         std::mutex cmd_queue_mutex;
         std::thread read_thread;
         std::thread write_thread;
-        SerialPort serial;
 
+        SerialPort serial;
         size_t max_buffer_size;
         std::unique_ptr<char[]> buffer;
         char *parse_start;
+
         char *parse_end;
 
         volatile MachineStatus status;
-
         std::queue<size_t> cmd_size_queue;
-        volatile ssize_t cmd_size_outstanding;
 
-        Eigen::Vector3d wpos;
-        Eigen::Vector3d mpos;
+        volatile ssize_t cmd_size_outstanding;
     };
 
 }
