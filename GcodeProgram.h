@@ -39,7 +39,7 @@ namespace cnsee {
     std::istream& operator>>(std::istream& is, GToken& token)
     {
         while(is.good() && std::isspace(is.peek())) is.get();
-        token.letter = is.get();
+        token.letter = (char)is.get();
         is >> token.number;
         return is;
     }
@@ -72,12 +72,12 @@ namespace cnsee {
                 // ignore input
             }else if(c=='\n') {
                 if(token.letter) {
-                    // Add char to token
+                    // Add token to line
                     line.tokens.push_back(token);
                     token.letter = 0;
                 }
                 if(line.tokens.size()) {
-                    // Add token to line
+                    // Add line to program
                     program.lines.push_back(line);
                     line.tokens.clear();
                 }
@@ -86,17 +86,21 @@ namespace cnsee {
                 continue;
             }else if(std::isspace(c)) {
                 if(token.letter) {
-                    // Add char to token
+                    // Add token to line
                     line.tokens.push_back(token);
                     token.letter = 0;
                 }
             }else {
-                // Add to current token
-                if(!token.letter) {
-                    token.letter = c;
-                }else{
+                if(std::isdigit(c) || c == '-' || c == '.') {
                     is >> token.number;
                     continue;
+                }else if(token.letter){
+                    // start new token
+                    line.tokens.push_back(token);
+                    token.letter = (char)c;
+                }else{
+                    // Set letter for next token
+                    token.letter = (char)c;
                 }
             }
             is.get();
