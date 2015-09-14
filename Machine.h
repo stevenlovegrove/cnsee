@@ -1,26 +1,12 @@
 #pragma once
 
+#include <string.h>
+#include <queue>
 #include <thread>
 #include <Eigen/Eigen>
 
 #include "GcodeProgram.h"
 #include "Serial/SerialPort.h"
-#include <string.h>
-#include <queue>
-
-std::vector<std::string>& Split(const std::string& s, char delim, std::vector<std::string>& elements) {
-    std::stringstream ss(s);
-    std::string item;
-    while (std::getline(ss, item, delim)) {
-        elements.push_back(item);
-    }
-    return elements;
-}
-
-std::vector<std::string> Split(const std::string &s, char delim) {
-    std::vector<std::string> elems;
-    return Split(s, delim, elems);
-}
 
 namespace Eigen
 {
@@ -55,8 +41,6 @@ namespace cnsee {
     class GerblMachine : public Machine {
     public:
 
-        typedef GCodeCmd<double> GCodeCmdT;
-
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
         GerblMachine()
@@ -66,6 +50,7 @@ namespace cnsee {
                   parse_start(buffer.get()),
                   parse_end(parse_start),
                   status(Disconnected),
+                  cmd_id(0),
                   cmd_size_outstanding(0)
         {
         }
@@ -113,9 +98,13 @@ namespace cnsee {
 
             {
                 std::unique_lock<std::mutex> lock(cmd_queue_mutex);
+                QueuedCommand cmd;
+                cmd.cmd_size = size;
+                cmd.cmd = std::string(gcode, size);
+                cmd.uid = cmd_id++;
                 // Add to cmd buffer size 'in transit'
                 cmd_size_outstanding += size;
-                cmd_size_queue.push(size);
+                pending_queue.push(cmd);
             }
 
             size_t num_written = 0;
@@ -134,7 +123,8 @@ namespace cnsee {
 
         void RequestStatus()
         {
-            if(status != Disconnected) {
+            // Only request status updates when we're connected and there aren't too many requests pending.
+            if(status != Disconnected && pending_queue.size() < 3) {
                 SendLine("?");
             }
         }
@@ -194,13 +184,13 @@ namespace cnsee {
         {
             std::unique_lock<std::mutex> lock(cmd_queue_mutex);
 
-            if(cmd_size_queue.size() > 0) {
-                size_t size = cmd_size_queue.front();
-                cmd_size_queue.pop();
-                cmd_size_outstanding -= size;
+            if(pending_queue.size() > 0) {
+                const QueuedCommand& qc = pending_queue.front();
+                cmd_size_outstanding -= qc.cmd_size;
                 if( cmd_size_outstanding < 0) {
                     throw std::runtime_error("Mismatched cmd queue response.");
                 }
+                pending_queue.pop();
             }else{
                 throw std::runtime_error("Mismatched cmd queue response.");
             }
@@ -320,8 +310,15 @@ namespace cnsee {
         char *parse_end;
 
         volatile MachineStatus status;
-        std::queue<size_t> cmd_size_queue;
 
+        struct QueuedCommand{
+            size_t uid;
+            std::string cmd;
+            size_t cmd_size;
+        };
+
+        std::queue<QueuedCommand> pending_queue;
+        size_t cmd_id;
         volatile ssize_t cmd_size_outstanding;
     };
 

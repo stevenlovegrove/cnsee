@@ -25,8 +25,12 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     Heightmap(const Eigen::AlignedBox<T,3>& bounds_mm)
-        : res_per_mm(50.0f), tool(3.2, 8.0)
+        : res_per_mm(10.0f), tool(3.2, 8.0)
     {
+        if(bounds_mm.isEmpty()) {
+            throw std::invalid_argument("Heightmap initialized with empy bounds");
+        }
+
         Init(bounds_mm);
     }
 
