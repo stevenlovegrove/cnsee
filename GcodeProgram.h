@@ -81,8 +81,9 @@ namespace cnsee {
                     program.lines.push_back(line);
                     line.tokens.clear();
                 }
-            }else if(c=='%') {
-                ConsumeUntil(is,'\n');
+            }else if(c=='%' || c=='#' || c=='*') {
+                // Treat checksums '*..' like end of line comments!
+                ConsumeUntil(is, '\n');
                 continue;
             }else if(std::isspace(c)) {
                 if(token.letter) {
