@@ -111,7 +111,7 @@ namespace cnsee
 
         MachineState()
             : units(GUnits_mm),
-              coords(GCoordinatesRelative),
+              coords(GCoordinatesAbsolute),
               feed_rate(100),
               P_w(0.0f,0.0f,0.0f,0.0f),
               active_cmd(Cmd::RapidLinearMove)

@@ -222,7 +222,7 @@ namespace cnsee {
         }
 
         void RapidLinearMove(const Eigen::Vector4f &End_w) {
-            // TODO: Get correct feedrate
+            // TODO: Get correct feedrate and perform freespace check
             LinearMove(End_w, 100);
         }
 
