@@ -54,6 +54,33 @@ namespace cnsee {
         std::vector<GLine> lines;
     };
 
+    inline float ConsumeFloat(std::istream &is)
+    {
+        float s = 1;
+        float v = 0;
+        float dec = 0;
+
+        int c = is.peek();
+        while(is.good() && (std::isdigit(c) || c == '.' || c == '-' || c == '+' ) )
+        {
+            if( c=='+') {
+                // ignore
+            }else if( c=='-') {
+                s = -1;
+            }else if( c=='.') {
+                dec = 10;
+            }else{
+                const float d = float(c - '0');
+                v = 10.0f*v + d;
+                if(dec) dec *= 10;
+            }
+            is.get();
+            c = is.peek();
+        }
+
+        return dec ? s*v/dec : s*v;
+    }
+
     inline GProgram ParseGProgram(std::istream &is)
     {
         GProgram program;
@@ -93,7 +120,7 @@ namespace cnsee {
                 }
             }else {
                 if(std::isdigit(c) || c == '-' || c == '.') {
-                    is >> token.number;
+                    token.number = ConsumeFloat(is);
                     continue;
                 }else if(token.letter){
                     // start new token
@@ -105,6 +132,10 @@ namespace cnsee {
                 }
             }
             is.get();
+        }
+
+        if(!is.eof()) {
+            pango_print_warn("Aborted due to error bit on stream.\n");
         }
 
         return program;
@@ -178,8 +209,16 @@ namespace cnsee {
                     }else if(t.letter == 'G') {
                         if(t.number == 0)       state.active_cmd = Cmd::RapidLinearMove;
                         else if(t.number == 1)  state.active_cmd = Cmd::LinearMove;
+                        else if(t.number == 17) state.plane  = GXY;
+                        else if(t.number == 18) state.plane  = GZX;
+                        else if(t.number == 19) state.plane  = GYZ;
                         else if(t.number == 20) state.units  = GUnits_inch;
                         else if(t.number == 21) state.units  = GUnits_mm;
+                        else if(t.number == 40) pango_print_warn("Ignoring 'tool compensation off'.\n");
+                        else if(t.number == 43) pango_print_warn("Ignoring 'tool offset'.\n");
+                        else if(t.number == 49) state.tool_offset = -1;
+                        else if(t.number == 54) pango_print_warn("Ignoring switch to User Offset 1.\n");
+                        else if(t.number == 80) state.active_cmd = Cmd::None; // TODO: Check this is correct action
                         else if(t.number == 90) state.coords = GCoordinatesAbsolute;
                         else if(t.number == 91) state.coords = GCoordinatesRelative;
                         else{
@@ -187,8 +226,14 @@ namespace cnsee {
                             state.active_cmd = Cmd::None;
                         }
                     }else if(t.letter == 'M') {
-                        std::cerr << "Unknown token: " << t << std::endl;
-                        state.active_cmd = Cmd::None;
+                        if(t.number == 3)      state.spindle_cw = +1;
+                        else if(t.number == 4) state.spindle_cw = -1;
+                        else if(t.number == 5) state.spindle_cw =  0;
+                        else if(t.number == 6) pango_print_warn("Ignoring 'tool change'.\n");
+                        else {
+                            std::cerr << "Unknown token: " << t << std::endl;
+                            state.active_cmd = Cmd::None;
+                        }
                     }else if(t.letter == 'X') {
                         SetOrdinate(axis[0], t.number);
                     }else if(t.letter == 'Y') {
@@ -199,6 +244,12 @@ namespace cnsee {
                         SetOrdinate(axis[3], t.number);
                     }else if(t.letter == 'F') {
                         feedrate = t.number;
+                    }else if(t.letter == 'S') {
+                        state.spindle_speed = t.number;
+                    }else if(t.letter == 'T') {
+                        pango_print_warn("Ignoring 'tool chance'.\n");
+                    }else if(t.letter == 'H') {
+                        pango_print_warn("Ignoring 'tool offset' parameter.\n");
                     }else{
                         std::cerr << "Unknown token: " << t << std::endl;
                         state.active_cmd = Cmd::None;
@@ -216,26 +267,36 @@ namespace cnsee {
 
         void LinearMove(const Eigen::Vector4f &End_w, float feedrate)
         {
-            const float dist = (End_w - state.P_w).norm();
-            const int samples = std::max(2, (int) std::ceil(dist * samples_per_unit));
-            for (int s = 0; s < samples; ++s) {
-                const float lambda = (float)s / (float)samples;
-                const Eigen::Vector4f P_w = (1 - lambda) * state.P_w + lambda * End_w;
-                SamplePosition(P_w.head<3>());
+            if(state.plane == GXY) {
+                const float dist = (End_w - state.P_w).norm();
+                if(dist > 0.0) {
+                    const int samples = std::max(2, (int) std::ceil(dist * samples_per_unit));
+                    for (int s = 0; s < samples; ++s) {
+                        const float lambda = (float)s / (float)samples;
+                        const Eigen::Vector4f P_w = (1 - lambda) * state.P_w + lambda * End_w;
+                        const Eigen::Vector3f P3_w = P_w.head<3>();
+                        bounds_mm.extend(P3_w);
+                        trajectory.push_back(P3_w);
+                    }
+                    state.P_w = End_w;
+                    state.feed_rate = feedrate;
+                }
+            }else{
+                pango_print_error("Unsupported Plane\n");
             }
-            state.P_w = End_w;
         }
 
         void RapidLinearMove(const Eigen::Vector4f &End_w) {
-            // TODO: Get correct feedrate and perform freespace check
-            LinearMove(End_w, 100);
-        }
-
-        void SamplePosition(const Eigen::Vector3f &P_w)
-        {
-            bounds_mm.extend(P_w);
-            trajectory.push_back(P_w);
-//            trajectory_info.push_back(info);
+            const float dist = (End_w - state.P_w).norm();
+            if(dist > 0.0) {
+                const int samples = std::max(2, (int) std::ceil(dist * samples_per_unit));
+                for (int s = 0; s < samples; ++s) {
+                    const float lambda = (float)s / (float)samples;
+                    const Eigen::Vector4f P_w = (1 - lambda) * state.P_w + lambda * End_w;
+                    trajectory.push_back(P_w.head<3>());
+                }
+                state.P_w = End_w;
+            }
         }
 
         const MachineState start_state;
