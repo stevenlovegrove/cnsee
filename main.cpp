@@ -31,6 +31,24 @@ void ComputeNormals(
     }
 }
 
+template<typename T>
+void ComputeNormals(
+    Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>& norms,
+    const Eigen::Matrix<T,Eigen::Dynamic,Eigen::Dynamic>& heightmap
+) {
+    for(int u=1; u < norms.rows()-1; ++u) {
+        for(int v=1; v < norms.cols()-1; ++v) {
+            const T dx = heightmap(u+1,v) - heightmap(u-1,v);
+            const T dy = heightmap(u,v+1) - heightmap(u,v-1);
+
+            // TODO: do this properly
+            norms(u,v) = Eigen::Matrix<T,3,1>(
+                dx, dy, sqrt(dx*dx+dy*dy)
+            );
+        }
+    }
+}
+
 int main( int argc, char** argv )
 {
     if(argc <= 1) {
@@ -44,7 +62,7 @@ int main( int argc, char** argv )
     const std::string grbl_serial = "/dev/tty.usbserial-A9ORBH5T";
 
     cnsee::GProgram prog = cnsee::ParseGProgram(filename);
-    cnsee::GProgramExecution exec(1000);
+    cnsee::GProgramExecution exec(10000);
     exec.ExecuteProgram(prog);
     cnsee::Heightmap<T> heightmap(exec.bounds_mm);
 
@@ -52,9 +70,12 @@ int main( int argc, char** argv )
     glEnable(GL_DEPTH_TEST);
 
     // Define Projection and initial ModelView matrix
+    const float ff = 420;
+    const float u0 = 320;
+    const float v0 = 240;
     pangolin::OpenGlRenderState s_cam(
-        pangolin::ProjectionMatrix(640,480,420,420,320,240,0.1,1000),
-        pangolin::ModelViewLookAt(0,0,100, 0,0,0, pangolin::AxisY)
+        pangolin::ProjectionMatrixRDF_TopLeft(640,480,420,420,320,240,0.001,100),
+        pangolin::ModelViewLookAtRDF(0,0,10, 0,0,0, 0,-1,0)
     );
     
     // Create Interactive View in window
@@ -78,7 +99,6 @@ int main( int argc, char** argv )
     pangolin::GlBuffer trajectory_vbo(pangolin::GlArrayBuffer, exec.trajectory.size(), GL_FLOAT, 3);
     pangolin::GlBuffer surface_vbo(pangolin::GlArrayBuffer, heightmap.surface.rows() * heightmap.surface.cols(), GL_FLOAT, 3);
     pangolin::GlBuffer surface_nbo(pangolin::GlArrayBuffer, heightmap.surface.rows() * heightmap.surface.cols(), GL_FLOAT, 3);
-    pangolin::GlBuffer surface_ibo = pangolin::MakeTriangleStripIboForVbo(heightmap.surface.rows(), heightmap.surface.cols());
     pangolin::GlTexture matcaptex;
     if(matcap_files.size()) {
         std::cout << "Using matcap texture: " << matcap_files[0] << std::endl;
@@ -87,11 +107,34 @@ int main( int argc, char** argv )
         std::cerr << "No 'matcap' textures found." << std::endl;
         return -1;
     }
+    pangolin::GlTexture heightmaptex(heightmap.surface.cols(), heightmap.surface.rows(), GL_LUMINANCE32F_ARB, true);
+    heightmaptex.SetLinear();
+    pangolin::GlTexture heightmapnorm(heightmap.surface.cols(), heightmap.surface.rows(), GL_RGB32F, true);
+    heightmapnorm.SetLinear();
+
+    const size_t buf_dim = 600;
+    pangolin::GlBuffer screen_vbo(pangolin::GlArrayBuffer, buf_dim*buf_dim, GL_FLOAT, 2);
+    {
+        float buf[buf_dim*buf_dim*2];
+        for(int y=0; y < buf_dim; ++y) {
+            for(int x=0; x < buf_dim; ++x) {
+                buf[2*(buf_dim*y + x)+0] = x / (float)buf_dim;
+                buf[2*(buf_dim*y + x)+1] = y / (float)buf_dim;
+            }
+        }
+        screen_vbo.Upload(buf, buf_dim*buf_dim*2*sizeof(float) );
+    }
+    pangolin::GlBuffer screen_ibo = pangolin::MakeTriangleStripIboForVbo(buf_dim,buf_dim);
 
     pangolin::GlSlProgram norm_shader;
     norm_shader.AddShaderFromFile(pangolin::GlSlVertexShader,   shaders_dir + std::string("/matcap.vert"));
     norm_shader.AddShaderFromFile(pangolin::GlSlFragmentShader, shaders_dir + std::string("/matcap.frag"));
     norm_shader.Link();
+
+    pangolin::GlSlProgram surface_shader;
+    surface_shader.AddShaderFromFile(pangolin::GlSlVertexShader,   shaders_dir + std::string("/surface.vert"));
+    surface_shader.AddShaderFromFile(pangolin::GlSlFragmentShader, shaders_dir + std::string("/surface.frag"));
+    surface_shader.Link();
 
     std::cout << "(" << exec.bounds_mm.min().transpose() << ") - (" << exec.bounds_mm.max().transpose() << ") mm." << std::endl;
     std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
@@ -118,7 +161,7 @@ int main( int argc, char** argv )
         heightmap.Clear();
         const Eigen::Matrix<T,3,1> offset(0.0, 0.0, tool_z_offset_mm);
         for(const Eigen::Matrix<T,3,1>& p_w : exec.trajectory) {
-            heightmap.MillSquare(p_w + offset);
+            heightmap.MillV(p_w + offset);
             mill_changed = true;
             if(mill_abort) break;
         }
@@ -158,6 +201,7 @@ int main( int argc, char** argv )
     });
 
     pangolin::FlagVarChanged();
+    tool_v_angle_deg.Meta().gui_changed = true;
 
     size_t frame = 0;
     while( !pangolin::ShouldQuit() )
@@ -186,10 +230,13 @@ int main( int argc, char** argv )
         if(mill_changed) {
             // Compute Normals
             mill_changed = false;
-            ComputeNormals(heightmap.normals, heightmap.surface);
+//            ComputeNormals(heightmap.normals, heightmap.surface);
+            ComputeNormals(heightmap.normals, heightmap.surface_height);
             trajectory_vbo.Upload(&exec.trajectory[0][0], exec.trajectory.size() * sizeof(T) * 3 );
             surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(T) * 3);
             surface_nbo.Upload(&heightmap.normals(0,0)[0], heightmap.normals.rows() * heightmap.normals.cols() * sizeof(T) * 3);
+            heightmaptex.Upload(&heightmap.surface_height(0,0), GL_LUMINANCE, GL_FLOAT);
+            heightmapnorm.Upload(&heightmap.normals(0,0)[0], GL_RGB, GL_FLOAT);
         }
         
         // Trajectory
@@ -205,10 +252,34 @@ int main( int argc, char** argv )
 
         // Surface
         if(show_surface) {
-            norm_shader.Bind();
-            matcaptex.Bind();
-            pangolin::RenderVboIboNbo(surface_vbo, surface_ibo, surface_nbo, show_mesh, true);
-            norm_shader.Unbind();
+            glEnableVertexAttribArray(pangolin::DEFAULT_LOCATION_POSITION);
+
+            screen_vbo.Bind();
+            glVertexAttribPointer(pangolin::DEFAULT_LOCATION_POSITION, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), 0 );
+            
+            surface_shader.Bind();
+            surface_shader.SetUniform("u_dim",  640.0f, 480.0f);
+            surface_shader.SetUniform("u_KT_cw", s_cam.GetProjectionModelViewMatrix() );
+            surface_shader.SetUniform("u_T_cw",  s_cam.GetModelViewMatrix() );
+            surface_shader.SetUniform("u_T_wc",  s_cam.GetModelViewMatrix().Inverse() );
+            surface_shader.SetUniform("u_ff", ff, ff);
+            surface_shader.SetUniform("u_pp", u0, v0);
+            surface_shader.SetUniform("u_heightmap", 0);
+            surface_shader.SetUniform("u_normmap", 1);
+
+            glActiveTexture(GL_TEXTURE0);
+            heightmaptex.Bind();
+            glActiveTexture(GL_TEXTURE1);
+            heightmapnorm.Bind();
+
+            screen_ibo.Bind();
+            glDrawElements(GL_TRIANGLE_STRIP, screen_ibo.num_elements, screen_ibo.datatype, 0);
+            screen_ibo.Unbind();
+
+            pangolin::RenderVboIbo(screen_vbo, screen_ibo, true);
+            surface_shader.Unbind();
+
+            glActiveTexture(GL_TEXTURE0);
         }
 
         if(show_endmill) {
@@ -217,6 +288,9 @@ int main( int argc, char** argv )
             pangolin::glDrawAxis(10.0);
             glPopMatrix();
         }
+
+        // origin
+        pangolin::glDrawAxis(1000.0);
 
         if(frame%6 == 0) {
             machine.RequestStatus();

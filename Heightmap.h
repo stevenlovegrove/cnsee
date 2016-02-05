@@ -25,7 +25,7 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     Heightmap(const Eigen::AlignedBox<T,3>& bounds_mm)
-        : max_pixels(2000*2000), tool(3.2, 8.0)
+        : max_pixels(5000*5000), tool(3.2, 8.0)
     {
         if(bounds_mm.isEmpty()) {
             throw std::invalid_argument("Heightmap initialized with empy bounds");
@@ -49,6 +49,7 @@ public:
         std::cout << res_per_mm << std::endl;
 
         Eigen::Vector2i size_pix = (res_per_mm*bbox_mm.sizes().template head<2>()).template cast<int>();
+        surface_height = Eigen::Matrix<T,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
         surface = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
         normals = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
         for(int r = 0; r < surface.rows(); ++r) {
@@ -58,10 +59,13 @@ public:
                 surface(r,c) = Eigen::Matrix<T,3,1>(x,y,(T)0.0);
             }
         }
+        surface_height.fill(0.0);
     }
 
     void Clear(T z = 0.0)
     {
+        surface_height.fill(0.0);
+
         for(int r = 0; r < surface.rows(); ++r) {
             for(int c = 0; c < surface.cols(); ++c) {
                 surface(r,c)[2] = z;
@@ -71,8 +75,6 @@ public:
 
     void MillSquare(const Eigen::Matrix<T, 3, 1> &p_w)
     {
-        // Surface strictly z < max_surface_height_mm
-        const T max_surface_height_mm = 0;
         const T rad_mm = tool.diameter / 2.0;
 
         if(rad_mm > 0.0) {
@@ -135,12 +137,14 @@ public:
 
     T& Height(const Eigen::Vector2i& p)
     {
-        return surface(p[1],p[0])[2];
+//        return surface(p[1],p[0])[2];
+        return surface_height(p[1],p[0]);
     }
 
     uint64_t max_pixels;
     T res_per_mm;
     Eigen::AlignedBox<T,3> bbox_mm;
+    Eigen::Matrix<T,Eigen::Dynamic,Eigen::Dynamic> surface_height;
     Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic> surface;
     Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic> normals;
 
