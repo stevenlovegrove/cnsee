@@ -2,6 +2,7 @@
 
 #include <string>
 #include <fstream>
+#include <deque>
 
 namespace cnsee {
 
@@ -29,15 +30,15 @@ struct GToken
 
 struct GLine
 {
-    std::string raw_line;
     size_t line_number;
+    std::string raw_line;
     std::vector<GToken> tokens;
 };
 
 struct GProgram
 {
     std::string name;
-    std::vector<GLine> lines;
+    std::deque<GLine> lines;
 };
 
 std::ostream& operator<<(std::ostream& os, const GToken& token)

@@ -64,7 +64,7 @@ int main( int argc, char** argv )
 
     cnsee::GProgramExecution exec;
     if(!gcode_filename.empty()) {
-        exec.ExecuteProgram(cnsee::TokenizeGCode(gcode_filename));
+        exec.ExecuteProgram(cnsee::TokenizeProgram(gcode_filename));
     }
     const cnsee::aligned_vector<Eigen::Vector3f> trajectory = exec.GenerateUpsampledTrajectory(samples_per_mm);
 
@@ -153,17 +153,10 @@ int main( int argc, char** argv )
     }
 
     const double step = 10.0;
-    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_UP,    [&](){ machine.MoveRel(Eigen::Vector3d(0,+step,0));});
-    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_DOWN,  [&](){ machine.MoveRel(Eigen::Vector3d(0,-step,0));});
-    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_RIGHT, [&](){ machine.MoveRel(Eigen::Vector3d(+step,0,0));});
-    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_LEFT,  [&](){ machine.MoveRel(Eigen::Vector3d(-step,0,0));});
-
-    pangolin::Var<std::function<void()> >("tool.unlock", [&](){
-        machine.SendLine("$X\n");
-    });
-    pangolin::Var<std::function<void()> >("tool.home", [&](){
-        machine.SendLine("$H\n");
-    });
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_UP,    [&](){ machine.QueueCommand(cnsee::MoveRel(Eigen::Vector3f(0,+step,0)).raw_line);});
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_DOWN,  [&](){ machine.QueueCommand(cnsee::MoveRel(Eigen::Vector3f(0,-step,0)).raw_line);});
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_RIGHT, [&](){ machine.QueueCommand(cnsee::MoveRel(Eigen::Vector3f(+step,0,0)).raw_line);});
+    pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_LEFT,  [&](){ machine.QueueCommand(cnsee::MoveRel(Eigen::Vector3f(-step,0,0)).raw_line);});
 
     pangolin::FlagVarChanged();
 
@@ -185,10 +178,6 @@ int main( int argc, char** argv )
             heightmap.tool.diameter = tool_tip_width_mm;
             heightmap.tool.height = tool_tip_height_mm;
             mill_in_thread();
-        }
-
-        if(hard_limits.GuiChanged()) {
-            machine.SetHardLimits(hard_limits);
         }
 
         if(mill_changed) {
@@ -235,9 +224,11 @@ int main( int argc, char** argv )
             glPopMatrix();
         }
 
-        if(frame%6 == 0) {
+//        if(frame%6 == 0)
+        {
             machine.RequestStatus();
         }
+
         ++frame;
         pangolin::FinishFrame();
     }

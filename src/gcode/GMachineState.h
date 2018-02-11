@@ -6,6 +6,14 @@
 
 namespace cnsee {
 
+enum class MachineStatus {
+    Disconnected,
+    Unknown,
+    Idle,
+    Running,
+    Alarm
+};
+
 enum GUnits
 {
     GUnits_inch, // G20
@@ -37,7 +45,8 @@ struct GMachineState
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     GMachineState()
-        : units(GUnits_mm),
+        : state(MachineStatus::Running),
+          units(GUnits_mm),
           feed_unit(GFeedUnitsPerTime),
           coords(GCoordinatesAbsolute),
           plane(GXY),
@@ -52,6 +61,7 @@ struct GMachineState
     {
     }
 
+    MachineStatus state;
     GUnits units;
     GFeedUnit feed_unit;
     GCoordinates coords;

@@ -1,50 +1,45 @@
 #pragma once
 
-#include <string.h>
-#include <queue>
+#include <string>
+#include <stack>
+#include <cctype>
+#include <deque>
 #include <thread>
+#include <algorithm>
 #include <Eigen/Eigen>
 
+#include "Machine.h"
 #include "../gcode/GTokenize.h"
+#include "../gcode/GLineBuilder.h"
 #include "../Serial/SerialPort.h"
 #include "../utils/StreamOperatorUtils.h"
 
 namespace cnsee {
-    enum class MachineStatus {
-        Disconnected,
-        Unknown,
-        Idle,
-        Running,
-        Alarm
-    };
 
-    class Machine {
-    public:
-        virtual ~Machine() { };
-
-        virtual void EmergencyStop() = 0;
-    };
-
-    class GrblMachine : public Machine {
+    class GrblMachine : public MachineInterface {
     public:
 
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
         GrblMachine()
                 : should_run(false),
-                  max_buffer_size(10240),
-                  buffer(new char[max_buffer_size]),
-                  parse_start(buffer.get()),
-                  parse_end(parse_start),
+                  max_read_buffer_size(10240),
+                  read_buffer(new char[max_read_buffer_size]),
+                  read_buffer_parse_start(read_buffer.get()),
+                  read_buffer_parse_end(read_buffer_parse_start),
                   status(MachineStatus::Disconnected),
-                  cmd_id(0),
                   cmd_size_outstanding(0)
         {
         }
 
         ~GrblMachine() {
+            should_run = false;
+            queue_changed_cond.notify_all();
+
+            if (write_thread.joinable()) {
+                write_thread.join();
+            }
             if (read_thread.joinable()) {
-                should_run = false;
                 read_thread.join();
             }
         }
@@ -66,101 +61,43 @@ namespace cnsee {
             // Start read thread
             should_run = true;
             read_thread = std::thread(&GrblMachine::ReadLoop, this);
-//        write_thread = std::thread(&GerblMachine::WriteLoop, this);
+            write_thread = std::thread(&GrblMachine::WriteLoop, this);
         }
+
+        ////////////////////////////////////////////////////////////////////////////////
+        // Implement MachineInterface
+        ////////////////////////////////////////////////////////////////////////////////
 
         void EmergencyStop() override {
+            //
         }
 
-        ssize_t GrblBufferAvailable() const
+        std::future<AckStatus> QueueCommand(const std::string& cmd) override
         {
-            return GRBL_RX_BUFFER_SIZE - cmd_size_outstanding;
-        }
-
-        void SendLine(const char *gcode, size_t size) {
-            if(size > GRBL_RX_BUFFER_SIZE) {
-                throw std::runtime_error("Command is greater than GRBL_RX_BUFFER_SIZE");
-            }
-
-            // TODO: Use condition variable.
-            // Busy-wait whilst buffer is full.
-            while(size > GrblBufferAvailable()) {
-//                if(!should_run) return;
-            }
-
+            std::future<AckStatus> f;
             {
-                std::unique_lock<std::mutex> lock(cmd_queue_mutex);
-                QueuedCommand cmd;
-                cmd.cmd_size = size;
-                cmd.cmd = std::string(gcode, size);
-                cmd.uid = cmd_id++;
-                // Add to cmd buffer size 'in transit'
-                cmd_size_outstanding += size;
-                pending_queue.push(cmd);
+                std::unique_lock<std::mutex> l(queue_mutex);
+                queued_commands.emplace_back(cmd);
+                f = queued_commands.back().promise.get_future();
             }
-
-            size_t num_written = 0;
-            while (should_run && num_written < size) {
-                num_written += serial.Write((unsigned char*) gcode, size);
-            }
+            queue_changed_cond.notify_all();
+            return f;
         }
 
-        void SendLine(const char *gcode) {
-            SendLine(gcode, strlen(gcode));
-        }
-
-        void SendLine(const std::string &gcode) {
-            SendLine(gcode.c_str(), gcode.size());
+        const std::shared_ptr<JobProgress> QueueProgram(const GProgram& program) override
+        {
+            throw std::runtime_error("Not implemented");
         }
 
         void RequestStatus()
         {
             // Only request status updates when we're connected and there aren't too many requests pending.
-            if(IsConnected() && pending_queue.size() < 3) {
-                SendLine("?");
+            if(IsConnected() && cmd_size_outstanding < 20) {
+                QueueCommand("?\n");
             }
         }
 
-        void MoveRel(const Eigen::Vector3d& v)
-        {
-            char buffer[1024];
-            snprintf(buffer,1024,"G91 X%f Y%f Z%f\n", v[0], v[1], v[2]);
-            SendLine(buffer);
-        }
-
-        void MoveTo(const Eigen::Vector3d& v)
-        {
-            char buffer[1024];
-            snprintf(buffer,1024,"G0 X%f Y%f Z%f\n", v[0], v[1], v[2]);
-            SendLine(buffer);
-        }
-
-        void MoveQuickTo(const Eigen::Vector3d& v)
-        {
-            char buffer[1024];
-            snprintf(buffer,1024,"G1 X%f Y%f Z%f\n", v[0], v[1], v[2]);
-            SendLine(buffer);
-        }
-
-        void SetHardLimits(bool enable)
-        {
-            if(enable) {
-                SendLine("$21=1\n");
-            }else{
-                SendLine("$21=0\n");
-            }
-        }
-
-        void SetUnits_mm()
-        {
-            SendLine("G21\n");
-        }
-
-        void Unlock()
-        {
-            SendLine("$X\n");
-        }
-
+        ////////////////////////////////////////////////////////////////////////////////
 
         Eigen::Vector3d wpos;
         Eigen::Vector3d mpos;
@@ -168,26 +105,54 @@ namespace cnsee {
         Eigen::Vector2d feed_speed;
 
     private:
+        struct PromisedCommand{
+            PromisedCommand(const std::string& cmd) : cmd(cmd){}
+            PromisedCommand(PromisedCommand&&) = default;
 
-        void ClearBuffer() {
-            parse_start = buffer.get();
-            parse_end = parse_start;
+            std::string cmd;
+            std::promise<AckStatus> promise;
+        };
+
+        ssize_t GrblBufferAvailable() const
+        {
+            return GRBL_RX_BUFFER_SIZE - cmd_size_outstanding;
         }
 
-        void QueueResponse(bool success)
-        {
-            std::unique_lock<std::mutex> lock(cmd_queue_mutex);
-
-            if(pending_queue.size() > 0) {
-                const QueuedCommand& qc = pending_queue.front();
-                cmd_size_outstanding -= qc.cmd_size;
-                if( cmd_size_outstanding < 0) {
-                    throw std::runtime_error("Mismatched cmd queue response.");
-                }
-                pending_queue.pop();
-            }else{
-                throw std::runtime_error("Mismatched cmd queue response.");
+        // Send gcode directly over wire
+        void SendLine(const char *gcode, size_t size) {
+            if(size > GRBL_RX_BUFFER_SIZE) {
+                throw std::runtime_error("Command is greater than max allowable line size (GRBL_RX_BUFFER_SIZE)");
             }
+
+            // TODO: Use condition variable.
+            // Busy-wait whilst buffer is full.
+            while(size > GrblBufferAvailable()) {
+            }
+
+            cmd_size_outstanding += size;
+
+            size_t total_written = 0;
+            while (should_run && total_written < size) {
+                const size_t written = serial.Write((unsigned char*) gcode, size);
+                gcode += written;
+                total_written += written;
+            }
+        }
+
+        void SendLine(const std::string &gcode) {
+            SendLine(gcode.c_str(), gcode.size());
+        }
+
+        static std::string SanitizedLine(const std::string& line)
+        {
+            std::string str(line);
+            str.erase(std::remove_if(str.begin(), str.end(), ::isspace), str.end());
+            return str;
+        }
+
+        void ClearBuffer() {
+            read_buffer_parse_start = read_buffer.get();
+            read_buffer_parse_end = read_buffer_parse_start;
         }
 
         bool ParseStatusNameVal(const std::string& name, const std::string& val)
@@ -213,8 +178,6 @@ namespace cnsee {
 
             char* end_status = std::find(start, end, '|');
             if(end_status == end) return false;
-
-//            <Idle|MPos:0.000,0.000,0.000|FS:0,0|WCO:0.000,0.000,-21.105>\r\n
 
             const std::string str_status(start+1, end_status);
             if( !str_status.compare(0,4,"Idle") ) {
@@ -258,9 +221,9 @@ namespace cnsee {
             std::cout << "Grbl connection established." << std::endl;
             status = MachineStatus::Unknown;
 
-            Unlock();
-            SetUnits_mm();
-            SetHardLimits(true);
+            QueueCommand("$X\n");    // unlock
+            QueueCommand("G21\n");   // mm units
+            QueueCommand("$21=1\n"); // enable hard-limits
         }
 
         void ParseLine(char *start, char *end) {
@@ -270,15 +233,13 @@ namespace cnsee {
                     std::cout << "feedback: " << std::string(start, end) << std::endl;
                 } else if (start[0] == '<') {
                     ParseStatus(start, end);
-//                    std::cout << "status: " << std::string(start, end) << std::endl;
-                    QueueResponse(true);
                 } else if (size >= 4 && !strncmp(start, "Grbl", 4)) {
                     MachineConnected();
                 } else if (size == 2 && !strncmp(start, "ok", 2)) {
-                    QueueResponse(true);
+                    ReceivedAck(AckStatus::Ack);
                 } else if (size >= 5 && !strncmp(start, "error", 5)) {
-                    QueueResponse(false);
-                    std::cout << std::string(start, end) << std::endl;
+                    std::cerr << std::string(start, end) << std::endl;
+                    ReceivedAck(AckStatus::Failed);
                 } else if (size >= 5 && !strncmp(start, "ALARM", 5)) {
                     std::cout << std::string(start, end) << std::endl;
                 } else if (start[0] == '\r' || start[0] == '\n') {
@@ -291,26 +252,38 @@ namespace cnsee {
             }
         }
 
+        void ReceivedAck(AckStatus status)
+        {
+            std::unique_lock<std::mutex> l(queue_mutex);
+            if(unacked_commands.empty()) {
+                std::cerr << "Warning: Received unmatched extra acknowledgement. Ignoring..." << std::endl;
+            }else{
+                unacked_commands.front().promise.set_value(status);
+                cmd_size_outstanding -= unacked_commands.front().cmd.size();
+                unacked_commands.pop_front();
+            }
+        }
+
         void ReadLoop() {
             while (should_run) {
-                if (!BytesLeft()) {
+                if (!ReadBufferBytesLeft()) {
                     // This really should never happen. If it does, we can shift buffer contents a bit.
                     throw std::runtime_error("Read buffer full");
                 }
 
                 if (serial.WaitForRead(0, 5000)) {
-                    parse_end += serial.Read((unsigned char *) parse_end, BytesLeft());
+                    read_buffer_parse_end += serial.Read((unsigned char *) read_buffer_parse_end, ReadBufferBytesLeft());
 
-                    char *newln = std::find(parse_start, parse_end, '\r');
-                    while (newln != parse_end) {
-                        ParseLine(parse_start, newln);
-                        parse_start = newln + 1;
-                        while(parse_start < parse_end && (parse_start[0] == '\r' || parse_start[0] == '\n') ) {
-                            ++parse_start;
+                    char *newln = std::find(read_buffer_parse_start, read_buffer_parse_end, '\r');
+                    while (newln != read_buffer_parse_end) {
+                        ParseLine(read_buffer_parse_start, newln);
+                        read_buffer_parse_start = newln + 1;
+                        while(read_buffer_parse_start < read_buffer_parse_end && (read_buffer_parse_start[0] == '\r' || read_buffer_parse_start[0] == '\n') ) {
+                            ++read_buffer_parse_start;
                         }
-                        newln = std::find(parse_start, parse_end, '\r');
+                        newln = std::find(read_buffer_parse_start, read_buffer_parse_end, '\r');
                     }
-                    if (parse_start == parse_end) {
+                    if (read_buffer_parse_start == read_buffer_parse_end) {
                         ClearBuffer();
                     }
                 }
@@ -318,38 +291,57 @@ namespace cnsee {
         }
 
         void WriteLoop() {
-            // TODO: Send queued data
+            while(should_run) {
+                {
+                    std::unique_lock<std::mutex> l(queue_mutex);
+                    while(queued_commands.empty()) {
+                        queue_changed_cond.wait(l);
+                        if(!should_run) return;
+                    }
+                    const std::string cmd = queued_commands.front().cmd;
+//                    if(cmd.length() && cmd[0] != '?') {
+                        unacked_commands.push_back(std::move(queued_commands.front()));
+//                    }else{
+//                        queued_commands.front().promise.set_value(AckStatus::NoOp);
+//                    }
+                    queued_commands.pop_front();
+                    SendLine(cmd);
+                }
+            }
         }
 
-        size_t BytesLeft() {
-            return max_buffer_size - (parse_end - buffer.get());
+        size_t ReadBufferBytesLeft() {
+            return max_read_buffer_size - (read_buffer_parse_end - read_buffer.get());
         }
+
+        ///////////////////////////////////////////////////////////////////////////////
 
         const static size_t GRBL_RX_BUFFER_SIZE = 127;
 
+        SerialPort serial;
+        size_t max_read_buffer_size;
+        std::unique_ptr<char[]> read_buffer;
+        char *read_buffer_parse_start;
+        char *read_buffer_parse_end;
+
+        volatile MachineStatus status;
         volatile bool should_run;
-        std::mutex cmd_queue_mutex;
         std::thread read_thread;
         std::thread write_thread;
 
-        SerialPort serial;
-        size_t max_buffer_size;
-        std::unique_ptr<char[]> buffer;
-        char *parse_start;
+        std::deque<PromisedCommand> queued_commands;
+        std::deque<PromisedCommand> unacked_commands;
+        std::mutex queue_mutex;
+        std::condition_variable queue_changed_cond;
 
-        char *parse_end;
-
-        volatile MachineStatus status;
-
-        struct QueuedCommand{
-            size_t uid;
-            std::string cmd;
-            size_t cmd_size;
-        };
-
-        std::queue<QueuedCommand> pending_queue;
-        size_t cmd_id;
         volatile ssize_t cmd_size_outstanding;
+
+        // Programs get sent to the machines queue.
+        struct ProgramAndProgress {
+            GProgram program;
+            std::shared_ptr<JobProgress> progrss;
+        };
+        std::stack<ProgramAndProgress> queued_programs;
     };
 
 }
