@@ -1,10 +1,11 @@
 #include <thread>
 
 #include <pangolin/pangolin.h>
+#include <pangolin/utils/argagg.hpp>
 
-#include "GcodeProgram.h"
-#include "Heightmap.h"
-#include "Machine.h"
+#include "machine/GrblMachine.h"
+#include "gcode/GProgramExecution.h"
+#include "cut/Heightmap.h"
 
 template<typename T>
 void ComputeNormals(
@@ -33,19 +34,40 @@ void ComputeNormals(
 
 int main( int argc, char** argv )
 {
-    if(argc <= 1) {
-        std::cout << "Usage: cnsee filename.nc" << std::endl;
-        return -1;
+    argagg::parser argparser {{
+            { "help",    {"-h", "--help"},    "Shows this help message", 0},
+            { "file",    {"-f", "--file"},    "Input gcode program filename", 1},
+            { "machine", {"-m", "--machine"}, "CNC Machine serial port device", 1},
+            { "samples", {"-s", "--samples"}, "Number of samples per mm for simulation", 1}
+    }};
+
+    argagg::parser_results args;
+    try {
+        args = argparser.parse(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+        return EXIT_FAILURE;
     }
 
-    typedef float T;
-    const std::string filename = argv[1];
-//    const std::string grbl_serial = "/dev/tty.USB0";
-    const std::string grbl_serial = "/dev/tty.usbserial-A9ORBH5T";
+    if (args["help"]) {
+        argagg::fmt_ostream(std::cerr)
+            << "Usage e.g: cnsee -f model.gcode -m /dev/tty.USB0" << std::endl
+            << argparser;
+        return EXIT_SUCCESS;
+    }
 
-    cnsee::GProgram prog = cnsee::ParseGProgram(filename);
-    cnsee::GProgramExecution exec(1000);
-    exec.ExecuteProgram(prog);
+    const std::string gcode_filename = args["file"].as<std::string>("");
+    const std::string grbl_serial = args["machine"].as<std::string>("");
+    const size_t samples_per_mm = args["samples"].as<size_t>(10);
+
+    typedef float T;
+
+    cnsee::GProgramExecution exec;
+    if(!gcode_filename.empty()) {
+        exec.ExecuteProgram(cnsee::TokenizeGCode(gcode_filename));
+    }
+    const cnsee::aligned_vector<Eigen::Vector3f> trajectory = exec.GenerateUpsampledTrajectory(samples_per_mm);
+
     cnsee::Heightmap<T> heightmap(exec.bounds_mm);
 
     pangolin::CreateWindowAndBind("Main",640,480);
@@ -60,33 +82,19 @@ int main( int argc, char** argv )
     // Create Interactive View in window
     pangolin::Handler3D handler(s_cam);
     pangolin::CreatePanel("tool")
-            .SetBounds(0.0, 1.0, 0.0, pangolin::Attach::Pix(180));
+            .SetBounds(0.0, 1.0, 0.0, pangolin::Attach::Pix(300));
     pangolin::View& d_cam = pangolin::CreateDisplay()
-            .SetBounds(0.0, 1.0, pangolin::Attach::Pix(180), 1.0, -640.0f/480.0f)
+            .SetBounds(0.0, 1.0, pangolin::Attach::Pix(300), 1.0, -640.0f/480.0f)
             .SetHandler(&handler);
 
+    // Assume shaders are located in the build directory or in some parent of there.
     const std::string shaders_dir = pangolin::FindPath(".", "/shaders");
-    std::vector<std::string> matcap_files;
-#ifdef HAVE_JPEG
-    pangolin::FilesMatchingWildcard(shaders_dir + std::string("/matcap/*.jpg"), matcap_files);
-#endif // HAVE_JPEG
-#ifdef HAVE_PNG
-    pangolin::FilesMatchingWildcard(shaders_dir + std::string("/matcap/*.png"), matcap_files);
-#endif // HAVE_PNG
-    std::sort(matcap_files.begin(), matcap_files.end());
-
-    pangolin::GlBuffer trajectory_vbo(pangolin::GlArrayBuffer, exec.trajectory.size(), GL_FLOAT, 3);
+    pangolin::GlBuffer trajectory_vbo(pangolin::GlArrayBuffer, trajectory.size(), GL_FLOAT, 3);
     pangolin::GlBuffer surface_vbo(pangolin::GlArrayBuffer, heightmap.surface.rows() * heightmap.surface.cols(), GL_FLOAT, 3);
     pangolin::GlBuffer surface_nbo(pangolin::GlArrayBuffer, heightmap.surface.rows() * heightmap.surface.cols(), GL_FLOAT, 3);
     pangolin::GlBuffer surface_ibo = pangolin::MakeTriangleStripIboForVbo(heightmap.surface.rows(), heightmap.surface.cols());
     pangolin::GlTexture matcaptex;
-    if(matcap_files.size()) {
-        std::cout << "Using matcap texture: " << matcap_files[0] << std::endl;
-        matcaptex.LoadFromFile(matcap_files[0]);
-    }else{
-        std::cerr << "No 'matcap' textures found." << std::endl;
-        return -1;
-    }
+    matcaptex.LoadFromFile(shaders_dir + "/matcap/thuglee-backlight-01.jpg");
 
     pangolin::GlSlProgram norm_shader;
     norm_shader.AddShaderFromFile(pangolin::GlSlVertexShader,   shaders_dir + std::string("/matcap.vert"));
@@ -95,14 +103,15 @@ int main( int argc, char** argv )
 
     std::cout << "(" << exec.bounds_mm.min().transpose() << ") - (" << exec.bounds_mm.max().transpose() << ") mm." << std::endl;
     std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
-    std::cout << matcap_files[0] << std::endl;
+
+    pangolin::Var<float> cut_time("tool.cut_time", 0.0, 0.0, exec.TotalTime_s());
 
     pangolin::Var<bool> show_trajectory("tool.show_trajectory", true, true);
     pangolin::Var<bool> show_surface("tool.show_surface", true, true);
     pangolin::Var<bool> show_mesh("tool.show_mesh", true, true);
-    pangolin::Var<bool> show_endmill("tool.show_endmill", true, true);
+    pangolin::Var<bool> show_live_endmill("tool.show_endmill", true, true);
 
-    pangolin::Var<float> tool_tip_width_mm("tool.diameter_mm", 0.01, 0.01, 5.0);
+    pangolin::Var<float> tool_tip_width_mm("tool.diameter_mm", 0.6, 0.01, 5.0);
     pangolin::Var<float> tool_tip_height_mm("tool.height_mm", 8.0, 0.0, 10.0);
     pangolin::Var<float> tool_v_angle_deg("tool.v_angle_deg", 40, 0.0, 100.0);
     pangolin::Var<float> tool_z_offset_mm("tool.z_offset_mm", 0.0, -1.0, +1.0);
@@ -117,7 +126,7 @@ int main( int argc, char** argv )
         mill_abort = false;
         heightmap.Clear();
         const Eigen::Matrix<T,3,1> offset(0.0, 0.0, tool_z_offset_mm);
-        for(const Eigen::Matrix<T,3,1>& p_w : exec.trajectory) {
+        for(const Eigen::Matrix<T,3,1>& p_w : trajectory) {
             heightmap.MillSquare(p_w + offset);
             mill_changed = true;
             if(mill_abort) break;
@@ -132,13 +141,15 @@ int main( int argc, char** argv )
         mill_thread = std::thread(mill);
     };
 
-    // Connect to machine
-    cnsee::GerblMachine machine;
+    // CNC Machine
+    cnsee::GrblMachine machine;
 
-    try{
-        machine.Open(grbl_serial);
-    }catch(...) {
-        std::cerr << "Unable to connect to machine." << std::endl;
+    if(!grbl_serial.empty()) {
+        try{
+            machine.Open(grbl_serial);
+        }catch(...) {
+            std::cerr << "Unable to connect to machine." << std::endl;
+        }
     }
 
     const double step = 10.0;
@@ -147,9 +158,6 @@ int main( int argc, char** argv )
     pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_RIGHT, [&](){ machine.MoveRel(Eigen::Vector3d(+step,0,0));});
     pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_LEFT,  [&](){ machine.MoveRel(Eigen::Vector3d(-step,0,0));});
 
-    pangolin::Var<std::function<void()> > gcode_x_plus("tool.x_plus", [&](){
-        machine.SendLine("G91 G0  Y10\n");
-    });
     pangolin::Var<std::function<void()> >("tool.unlock", [&](){
         machine.SendLine("$X\n");
     });
@@ -187,7 +195,7 @@ int main( int argc, char** argv )
             // Compute Normals
             mill_changed = false;
             ComputeNormals(heightmap.normals, heightmap.surface);
-            trajectory_vbo.Upload(&exec.trajectory[0][0], exec.trajectory.size() * sizeof(T) * 3 );
+            trajectory_vbo.Upload(&trajectory[0][0], trajectory.size() * sizeof(T) * 3 );
             surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(T) * 3);
             surface_nbo.Upload(&heightmap.normals(0,0)[0], heightmap.normals.rows() * heightmap.normals.cols() * sizeof(T) * 3);
         }
@@ -198,7 +206,7 @@ int main( int argc, char** argv )
             trajectory_vbo.Bind();
             glVertexPointer(3, GL_FLOAT, 0, 0);
             glEnableClientState(GL_VERTEX_ARRAY);
-            glDrawArrays(GL_LINE_STRIP, 0, exec.trajectory.size());
+            glDrawArrays(GL_LINE_STRIP, 0, trajectory.size());
             glDisableClientState(GL_VERTEX_ARRAY);
             trajectory_vbo.Unbind();
         }
@@ -211,10 +219,19 @@ int main( int argc, char** argv )
             norm_shader.Unbind();
         }
 
-        if(show_endmill) {
+        if(show_live_endmill) {
             glPushMatrix();
             glTranslated(machine.mpos[0],machine.mpos[1],machine.mpos[2]);
             pangolin::glDrawAxis(10.0);
+            glPopMatrix();
+        }
+
+        // Show simulated cutting head position
+        {
+            glPushMatrix();
+            const Eigen::Vector3f mpos = exec.GetP_wAtTime(cut_time).head<3>();
+            glTranslated(mpos[0],mpos[1],mpos[2]);
+            pangolin::glDrawAxis(1.0);
             glPopMatrix();
         }
 

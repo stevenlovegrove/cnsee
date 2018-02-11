@@ -1,5 +1,8 @@
 #pragma  once
 
+#include <cstdint>
+#include <string>
+
 namespace cnsee
 {
     typedef uint64_t GCodeId;

@@ -5,25 +5,12 @@
 #include <thread>
 #include <Eigen/Eigen>
 
-#include "GcodeProgram.h"
-#include "Serial/SerialPort.h"
-
-namespace Eigen
-{
-    inline std::istream& operator>>( std::istream& is, Eigen::Vector3d& mat)
-    {
-        size_t rows = mat.rows();
-        for( size_t r = 0; r < rows-1; r++ ) {
-            is >> mat[r];
-            is.get();
-        }
-        is >> mat[rows-1];
-        return is;
-    }
-}
+#include "../gcode/GTokenize.h"
+#include "../Serial/SerialPort.h"
+#include "../utils/StreamOperatorUtils.h"
 
 namespace cnsee {
-    enum MachineStatus {
+    enum class MachineStatus {
         Disconnected,
         Unknown,
         Idle,
@@ -38,33 +25,38 @@ namespace cnsee {
         virtual void EmergencyStop() = 0;
     };
 
-    class GerblMachine : public Machine {
+    class GrblMachine : public Machine {
     public:
 
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-        GerblMachine()
+        GrblMachine()
                 : should_run(false),
                   max_buffer_size(10240),
                   buffer(new char[max_buffer_size]),
                   parse_start(buffer.get()),
                   parse_end(parse_start),
-                  status(Disconnected),
+                  status(MachineStatus::Disconnected),
                   cmd_id(0),
                   cmd_size_outstanding(0)
         {
         }
 
-        ~GerblMachine() {
+        ~GrblMachine() {
             if (read_thread.joinable()) {
                 should_run = false;
                 read_thread.join();
             }
         }
 
-        GerblMachine(const std::string &serial_port)
+        GrblMachine(const std::string &serial_port)
                 : should_run(false) {
             Open(serial_port);
+        }
+
+        bool IsConnected() const
+        {
+            return status != MachineStatus::Disconnected;
         }
 
         void Open(const std::string &serial_port) {
@@ -73,7 +65,7 @@ namespace cnsee {
 
             // Start read thread
             should_run = true;
-            read_thread = std::thread(&GerblMachine::ReadLoop, this);
+            read_thread = std::thread(&GrblMachine::ReadLoop, this);
 //        write_thread = std::thread(&GerblMachine::WriteLoop, this);
         }
 
@@ -124,7 +116,7 @@ namespace cnsee {
         void RequestStatus()
         {
             // Only request status updates when we're connected and there aren't too many requests pending.
-            if(status != Disconnected && pending_queue.size() < 3) {
+            if(IsConnected() && pending_queue.size() < 3) {
                 SendLine("?");
             }
         }
@@ -172,6 +164,8 @@ namespace cnsee {
 
         Eigen::Vector3d wpos;
         Eigen::Vector3d mpos;
+        Eigen::Vector3d wco;
+        Eigen::Vector2d feed_speed;
 
     private:
 
@@ -196,37 +190,73 @@ namespace cnsee {
             }
         }
 
+        bool ParseStatusNameVal(const std::string& name, const std::string& val)
+        {
+            if(!name.compare("MPos")) {
+                mpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(val);
+            }else if(!name.compare("WPos")) {
+                wpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(val);
+            }else if(!name.compare("WCO")) {
+                wco = pangolin::Convert<Eigen::Vector3d,std::string>::Do(val);
+            }else if(!name.compare("FS")) {
+                feed_speed = pangolin::Convert<Eigen::Vector2d,std::string>::Do(val);
+            }else if(!name.compare("Ov")) {
+                // Ignore Overrides status
+            }else{
+                std::cerr << "Unknown status Name:Value pair: ('" << name << "' : '" << val << "')" << std::endl;
+                return false;
+            }
+            return true;
+        }
+
         bool ParseStatus(char *start, char *end) {
-            char* end_status = std::find(start, end, ',');
+
+            char* end_status = std::find(start, end, '|');
             if(end_status == end) return false;
 
-            std::string str_status(start+1, end_status);
+//            <Idle|MPos:0.000,0.000,0.000|FS:0,0|WCO:0.000,0.000,-21.105>\r\n
+
+            const std::string str_status(start+1, end_status);
             if( !str_status.compare(0,4,"Idle") ) {
-                status = Idle;
+                status = MachineStatus::Idle;
             }else if( !str_status.compare(0,3,"Run") ) {
-                status = Running;
+                status = MachineStatus::Running;
             }else if( !str_status.compare(0,5,"Alarm") ) {
-                status = Alarm;
+                status = MachineStatus::Alarm;
             }else{
-                status = Unknown;
+                status = MachineStatus::Unknown;
             }
 
-            char* m_pos = std::find(end_status+1, end, 'M');
-            char* w_pos = std::find(end_status+1, end, 'W');
-            if(m_pos == end || w_pos == end ) return false;
+            // Find all name:value pairs
+            char* token_start = end_status+1;
+            char* name_val_sep = std::find(token_start, end, ':');
 
-            std::string str_mpos(m_pos +5, w_pos -1);
-            std::string str_wpos(w_pos +5, end-1);
+            while(name_val_sep != end) {
+                char* token_end = std::find(token_start, end, '|');
+                if(token_end == end) {
+                    token_end =  std::find(token_start, end, '>');
+                    if(token_end == end) {
+                        // Parse error
+                        std::cerr << "Error parsing status: " << std::string(start, end) << std::endl;
+                        return false;
+                    }
+                }
 
-            mpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(str_mpos);
-            wpos = pangolin::Convert<Eigen::Vector3d,std::string>::Do(str_wpos);
+                const std::string name(token_start, name_val_sep);
+                const std::string val(name_val_sep+1, token_end);
+                ParseStatusNameVal(name,val);
+
+                token_start = token_end+1;
+                name_val_sep = std::find(token_start, end, ':');
+            }
+
             return true;
         }
 
         void MachineConnected()
         {
             std::cout << "Grbl connection established." << std::endl;
-            status = Unknown;
+            status = MachineStatus::Unknown;
 
             Unlock();
             SetUnits_mm();

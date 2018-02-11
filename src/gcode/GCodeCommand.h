@@ -2,8 +2,11 @@
 
 #include <iomanip>
 #include <sstream>
+
+#include <Eigen/Core>
+
 #include "GCodeDescription.h"
-#include "StreamOperatorUtils.h"
+#include "../utils/StreamOperatorUtils.h"
 
 namespace cnsee
 {
@@ -92,52 +95,5 @@ namespace cnsee
         static const GCodeId FloodCoolantOn = 0x384dul; // M8
         static const GCodeId AllCoolantOff = 0x394dul; // M9
     }
-
-    enum GUnits
-    {
-        GUnits_inch, // G20
-        GUnits_mm    // G21
-    };
-
-    enum GCoordinates
-    {
-        GCoordinatesAbsolute, // G90
-        GCoordinatesRelative  // G91
-    };
-
-    enum GPlane
-    {
-        GXY,    // G17
-        GZX,    // G18
-        GYZ,    // G19
-    };
-
-    struct MachineState
-    {
-        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-        MachineState()
-            : units(GUnits_mm),
-              coords(GCoordinatesAbsolute),
-              plane(GXY),
-              feed_rate(100),
-              tool_offset(-1),
-              P_w(0.0f,0.0f,0.0f,0.0f),
-              active_cmd(Cmd::RapidLinearMove),
-              spindle_cw(0),
-              spindle_speed(0)
-        {
-        }
-
-        GUnits units;
-        GCoordinates coords;
-        GPlane plane;
-        float feed_rate;
-        int tool_offset;
-        Eigen::Vector4f P_w;
-        GCodeId active_cmd;
-        int spindle_cw;
-        float spindle_speed;
-    };
 
 }

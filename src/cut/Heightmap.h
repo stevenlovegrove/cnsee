@@ -27,10 +27,6 @@ public:
     Heightmap(const Eigen::AlignedBox<T,3>& bounds_mm)
         : max_pixels(2000*2000), tool(3.2, 8.0)
     {
-        if(bounds_mm.isEmpty()) {
-            throw std::invalid_argument("Heightmap initialized with empy bounds");
-        }
-
         Init(bounds_mm);
     }
 
@@ -38,16 +34,15 @@ public:
     {
         const float border = 0.01;
         bbox_mm = bounds_mm;
+        if(bbox_mm.isEmpty()) {
+            bbox_mm.extend(Eigen::Matrix<T,3,1>::Zero());
+        }
         bbox_mm.min()[0] -= border;
         bbox_mm.min()[1] -= border;
         bbox_mm.max()[0] += border;
         bbox_mm.max()[1] += border;
 
         res_per_mm = std::sqrt((float)max_pixels / bbox_mm.sizes().template head<2>().prod());
-        std::cout << max_pixels << std::endl;
-        std::cout << bbox_mm.sizes().template head<2>().prod() << std::endl;
-        std::cout << res_per_mm << std::endl;
-
         Eigen::Vector2i size_pix = (res_per_mm*bbox_mm.sizes().template head<2>()).template cast<int>();
         surface = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
         normals = Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic>(size_pix[1], size_pix[0]);
@@ -72,7 +67,6 @@ public:
     void MillSquare(const Eigen::Matrix<T, 3, 1> &p_w)
     {
         // Surface strictly z < max_surface_height_mm
-        const T max_surface_height_mm = 0;
         const T rad_mm = tool.diameter / 2.0;
 
         if(rad_mm > 0.0) {
@@ -83,7 +77,9 @@ public:
             const Eigen::Matrix<T,2,1> min_pix = center_pix.array() - max_rad_pix_border;
             const Eigen::Matrix<T,2,1> max_pix = center_pix.array() + max_rad_pix_border;
 
-            const Eigen::AlignedBox2i update_pix(min_pix.template cast<int>(), max_pix.template cast<int>() );
+            const Eigen::AlignedBox2i bounds_pix(Eigen::Vector2i(0,0), Eigen::Vector2i(surface.cols()-1, surface.rows()-1));
+            const Eigen::AlignedBox2i change_pix(min_pix.template cast<int>(), max_pix.template cast<int>() );
+            const Eigen::AlignedBox2i update_pix = change_pix.intersection(bounds_pix);
 
             // Update height for max_rad patch around p_w.xy
             Eigen::Vector2i pix;
@@ -117,7 +113,9 @@ public:
             const Eigen::Matrix<T,2,1> min_pix = center_pix.array() - max_rad_pix_border;
             const Eigen::Matrix<T,2,1> max_pix = center_pix.array() + max_rad_pix_border;
 
-            const Eigen::AlignedBox2i update_pix(min_pix.template cast<int>(), max_pix.template cast<int>() );
+            const Eigen::AlignedBox2i bounds_pix(Eigen::Vector2i(0,0), Eigen::Vector2i(surface.cols(), surface.rows()));
+            const Eigen::AlignedBox2i change_pix(min_pix.template cast<int>(), max_pix.template cast<int>() );
+            const Eigen::AlignedBox2i update_pix = change_pix.intersection(bounds_pix);
 
             // Update height for max_rad patch around p_w.xy
             Eigen::Vector2i pix;
