@@ -37,6 +37,15 @@ struct JobProgress {
     float distance_moved;
 };
 
+struct ProbeResult {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    bool contact_made;
+
+    Eigen::Vector3f probe_start;
+    Eigen::Vector3f probe_direction;
+    Eigen::Vector3f contact_point;
+};
+
 // Pure Virtual Interface
 class MachineInterface {
 public:
@@ -46,11 +55,13 @@ public:
     virtual void EmergencyStop() = 0;
 
     // Queue GCode line
-    virtual std::future<AckStatus> QueueCommand(const std::string& line) = 0;
+    virtual std::future<AckStatus> QueueCommand(const std::string& gcode_line) = 0;
 
     // Execute the gcode program
     // returns a shared progress object which can be used to query the programs state
     virtual const std::shared_ptr<JobProgress> QueueProgram(const GProgram& program) = 0;
+
+    virtual std::future<ProbeResult> ProbeSurface(const Eigen::Vector3f& probe_direction, float feed_rate) = 0;
 
     //        virtual void Pause() = 0;
     //        virtual void Continue() = 0;

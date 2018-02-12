@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <Eigen/Eigen>
 
+#include <pangolin/utils/format_string.h>
+
 #include "Machine.h"
 #include "../gcode/GTokenize.h"
 #include "../gcode/GLineBuilder.h"
@@ -28,7 +30,8 @@ namespace cnsee {
                   read_buffer_parse_start(read_buffer.get()),
                   read_buffer_parse_end(read_buffer_parse_start),
                   status(MachineStatus::Disconnected),
-                  cmd_size_outstanding(0)
+                  cmd_size_outstanding(0),
+                  probe_contact(false)
         {
         }
 
@@ -89,6 +92,40 @@ namespace cnsee {
             throw std::runtime_error("Not implemented");
         }
 
+        std::future<ProbeResult> ProbeSurface(const Eigen::Vector3f& dir, float feed_rate) override {
+            std::future<ProbeResult> f;
+            {
+                std::unique_lock<std::mutex> l(queue_mutex);
+                pending_probes.emplace_back(dir);
+                f = pending_probes.back().promise.get_future();
+            }
+
+            const std::string cmd = pangolin::FormatString("G91G38.3X%Y%Z%F%\n", dir[0], dir[1], dir[2], feed_rate);
+            auto ack_promise = QueueCommand(cmd);
+
+            if(ack_promise.get() != AckStatus::Ack)
+            {
+                // Command failed, so we wont receive a probe reply. We'd better dequeue
+                std::unique_lock<std::mutex> l(queue_mutex);
+                ProbeResult res;
+                res.contact_made = false;
+                res.probe_direction = dir;
+                // WARNING: This potentially introduces a race hazard, since another thread could
+                // have added something to this queue in the mean time.
+                pending_probes.back().promise.set_value(res);
+                pending_probes.pop_back();
+            }
+
+            return f;
+        }
+
+        // Offers a promise which is fullfilled only once the current point
+        // in the command buffer reaches the machine
+        std::future<AckStatus> QueueSync()
+        {
+            return QueueCommand("G4P0\n");
+        }
+
         void RequestStatus()
         {
             // Only request status updates when we're connected and there aren't too many requests pending.
@@ -103,6 +140,7 @@ namespace cnsee {
         Eigen::Vector3d mpos;
         Eigen::Vector3d wco;
         Eigen::Vector2d feed_speed;
+        bool probe_contact;
 
     private:
         struct PromisedCommand{
@@ -113,6 +151,15 @@ namespace cnsee {
             std::promise<AckStatus> promise;
         };
 
+        struct PromisedProbe{
+            PromisedProbe(const Eigen::Vector3f& dir): probe_direction(dir) {}
+            PromisedProbe(PromisedProbe&&) = default;
+
+            EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+            Eigen::Vector3f probe_direction;
+            std::promise<ProbeResult> promise;
+        };
+
         ssize_t GrblBufferAvailable() const
         {
             return GRBL_RX_BUFFER_SIZE - cmd_size_outstanding;
@@ -120,6 +167,10 @@ namespace cnsee {
 
         // Send gcode directly over wire
         void SendLine(const char *gcode, size_t size) {
+            if(size != 2) {
+                std::cout << "Sending: " << std::string(gcode,size) << std::flush;
+            }
+
             if(size > GRBL_RX_BUFFER_SIZE) {
                 throw std::runtime_error("Command is greater than max allowable line size (GRBL_RX_BUFFER_SIZE)");
             }
@@ -167,6 +218,8 @@ namespace cnsee {
                 feed_speed = pangolin::Convert<Eigen::Vector2d,std::string>::Do(val);
             }else if(!name.compare("Ov")) {
                 // Ignore Overrides status
+            }else if(!name.compare("Pn")) {
+                probe_contact = (val == std::string("P"));
             }else{
                 std::cerr << "Unknown status Name:Value pair: ('" << name << "' : '" << val << "')" << std::endl;
                 return false;
@@ -194,6 +247,10 @@ namespace cnsee {
             char* token_start = end_status+1;
             char* name_val_sep = std::find(token_start, end, ':');
 
+            // probe_contact will be set to true again in this loop.
+            // TODO: avoid race_hazard this introduces.
+            probe_contact = false;
+
             while(name_val_sep != end) {
                 char* token_end = std::find(token_start, end, '|');
                 if(token_end == end) {
@@ -213,6 +270,9 @@ namespace cnsee {
                 name_val_sep = std::find(token_start, end, ':');
             }
 
+            // Compute working coordinates from work coordinate offset.
+            wpos = mpos - wco;
+
             return true;
         }
 
@@ -226,11 +286,41 @@ namespace cnsee {
             QueueCommand("$21=1\n"); // enable hard-limits
         }
 
+        void ParseProbe(char* start, char* end) {
+            std::unique_lock<std::mutex> l(queue_mutex);
+
+            if(pending_probes.empty()) {
+                std::cerr << "Warning: Received unmatched extra probe response. Ignoring..." << std::endl;
+            }else{
+                ProbeResult result;
+                result.probe_direction = pending_probes.front().probe_direction;
+                char* b = std::find(start,end,':');
+                if(b != end) {
+                    char* e = std::find(b+1,end,':');
+                    if(e != end) {
+                        result.contact_point = pangolin::Convert<Eigen::Vector3f,std::string>::Do(std::string(b+1,e));
+                        char* ee = std::find(e+1,end,']');
+                        if(ee != end) {
+                            result.contact_made = e[1] == '1';
+                        }
+                    }
+                }
+
+                pending_probes.front().promise.set_value(result);
+                pending_probes.pop_front();
+            }
+        }
+
         void ParseLine(char *start, char *end) {
             ssize_t size = end - start;
             if (size > 0) {
                 if (start[0] == '[') {
-                    std::cout << "feedback: " << std::string(start, end) << std::endl;
+                    if(!strncmp(start,"[PRB:",5)) {
+                        ParseProbe(start, end);
+                    }else{
+                        // Other feedback
+                        std::cout << "feedback: " << std::string(start, end) << std::endl;
+                    }
                 } else if (start[0] == '<') {
                     ParseStatus(start, end);
                 } else if (size >= 4 && !strncmp(start, "Grbl", 4)) {
@@ -238,7 +328,7 @@ namespace cnsee {
                 } else if (size == 2 && !strncmp(start, "ok", 2)) {
                     ReceivedAck(AckStatus::Ack);
                 } else if (size >= 5 && !strncmp(start, "error", 5)) {
-                    std::cerr << std::string(start, end) << std::endl;
+                    std::cerr << "Error executing command, '" << std::string(start, end) << "'" << std::endl;
                     ReceivedAck(AckStatus::Failed);
                 } else if (size >= 5 && !strncmp(start, "ALARM", 5)) {
                     std::cout << std::string(start, end) << std::endl;
@@ -331,6 +421,8 @@ namespace cnsee {
 
         std::deque<PromisedCommand> queued_commands;
         std::deque<PromisedCommand> unacked_commands;
+        std::deque<PromisedProbe>   pending_probes;
+
         std::mutex queue_mutex;
         std::condition_variable queue_changed_cond;
 

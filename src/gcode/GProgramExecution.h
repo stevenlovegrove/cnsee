@@ -3,11 +3,9 @@
 #include "GMachineState.h"
 #include "GCodeCommand.h"
 #include "GTokenize.h"
+#include "../utils/aligned_vector.h"
 
 namespace cnsee {
-
-template<typename T>
-using aligned_vector = std::vector<T, Eigen::aligned_allocator<T>>;
 
 void ApplyGCode(GMachineState& state, const GLine& line) {
     auto SetOrdinate = [&](float &ordinate, float val)

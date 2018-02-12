@@ -7,21 +7,28 @@ namespace cnsee {
 GLine MoveRel(const Eigen::Vector3f& v)
 {
     char buffer[1024];
-    snprintf(buffer,1024,"G91 X%f Y%f Z%f\n", v[0], v[1], v[2]);
+    snprintf(buffer,1024,"G91G1X%fY%fZ%f\n", v[0], v[1], v[2]);
+    return TokenizeLine(std::string(buffer),-1);
+}
+
+GLine MoveRelQuick(const Eigen::Vector3f& v)
+{
+    char buffer[1024];
+    snprintf(buffer,1024,"G91G0X%fY%fZ%f\n", v[0], v[1], v[2]);
     return TokenizeLine(std::string(buffer),-1);
 }
 
 GLine MoveTo(const Eigen::Vector3f& v)
 {
     char buffer[1024];
-    snprintf(buffer,1024,"G0 X%f Y%f Z%f\n", v[0], v[1], v[2]);
+    snprintf(buffer,1024,"G90G1X%fY%fZ%f\n", v[0], v[1], v[2]);
     return TokenizeLine(std::string(buffer),-1);
 }
 
-GLine MoveQuickTo(const Eigen::Vector3f& v)
+GLine MoveToQuick(const Eigen::Vector3f& v)
 {
     char buffer[1024];
-    snprintf(buffer,1024,"G1 X%f Y%f Z%f\n", v[0], v[1], v[2]);
+    snprintf(buffer,1024,"G90G0X%fY%fZ%f\n", v[0], v[1], v[2]);
     return TokenizeLine(std::string(buffer),-1);
 }
 

@@ -24,6 +24,11 @@ class Heightmap
 public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
+    Heightmap()
+        : max_pixels(2000*2000), tool(3.2, 8.0)
+    {
+    }
+
     Heightmap(const Eigen::AlignedBox<T,3>& bounds_mm)
         : max_pixels(2000*2000), tool(3.2, 8.0)
     {
