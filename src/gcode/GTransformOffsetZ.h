@@ -8,13 +8,17 @@ namespace cnsee {
 
 GProgram GTransformOffsetZ(const GProgram& prog, const GrblMachine& machine, const ThinPlateSpline& surface_machine)
 {
+    // surface_machine says how to take 0_machine to new height. But we want 0_work to be new height.
+    // We must apply a second offset
+    const double zwork_offet = -machine.wco[2];
+
     // It is easier to adjust a purely absolute program
     GProgram transformed_prog = GTransformToAbs(prog);
 
     // Original execution
     const GProgramExecution orig_exec(transformed_prog);
     GMachineState new_state = orig_exec.state_vec[0];
-    new_state.P_w[2] += surface_machine.SurfaceOffset(machine.MachineFromWorkCoords(new_state.P_w) );
+    new_state.P_w[2] += surface_machine.SurfaceOffset(machine.MachineFromWorkCoords(new_state.P_w) ) + zwork_offet;
 
     // Check that there is an execution state to start and then for every line
     assert(orig_exec.state_vec.size() == transformed_prog.lines.size()+1);
@@ -26,7 +30,7 @@ GProgram GTransformOffsetZ(const GProgram& prog, const GrblMachine& machine, con
 
         // Construct desired state
         GMachineState desired_end = orig_line_end;
-        desired_end.P_w[2] += surface_machine.SurfaceOffset(machine.MachineFromWorkCoords(orig_line_end.P_w));
+        desired_end.P_w[2] += surface_machine.SurfaceOffset(machine.MachineFromWorkCoords(orig_line_end.P_w)) + zwork_offet;
 
         // Update Line to achieve desired state
         if(orig_line_end.active_cmd == Cmd::LinearMove || orig_line_end.active_cmd == Cmd::RapidLinearMove) {

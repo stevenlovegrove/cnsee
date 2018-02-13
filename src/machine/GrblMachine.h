@@ -71,6 +71,11 @@ namespace cnsee {
             write_thread = std::thread(&GrblMachine::WriteLoop, this);
         }
 
+        size_t NumberOfCommandsInQueue() const
+        {
+            return queued_commands.size();
+        }
+
         Eigen::Vector3d MachineFromWorkCoords(const Eigen::Vector3d& P_w) const
         {
             return P_w + wco;
@@ -99,11 +104,6 @@ namespace cnsee {
             }
             queue_changed_cond.notify_all();
             return f;
-        }
-
-        const std::shared_ptr<JobProgress> QueueProgram(const GProgram& program) override
-        {
-            throw std::runtime_error("Not implemented");
         }
 
         std::future<ProbeResult> ProbeSurface(const Eigen::Vector3d& dir, double feed_rate) override {
@@ -138,6 +138,15 @@ namespace cnsee {
         std::future<AckStatus> QueueSync()
         {
             return QueueCommand("G4P0\n");
+        }
+
+        void ClearCommandQueue()
+        {
+            std::unique_lock<std::mutex> l(queue_mutex);
+            for(auto& cmd : queued_commands) {
+                cmd.promise.set_value(AckStatus::Aborted);
+            }
+            queued_commands.clear();
         }
 
         void RequestStatus()

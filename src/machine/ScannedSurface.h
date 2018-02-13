@@ -18,23 +18,10 @@ public:
     {
     }
 
-    ScannedSurface(const Eigen::AlignedBox3d& bounds)
-    {
-        Clear();
-        ResetBounds(bounds);
-    }
-
     void Clear()
     {
         surface_samples.clear();
         tps.Clear();
-    }
-
-    void ResetBounds(const Eigen::AlignedBox3d& bounds)
-    {
-        this->bounds = bounds;
-        surface.Init(bounds.cast<float>());
-        UpdateSurface();
     }
 
     void AddSurfacePoint(const Eigen::Vector3d& P)
@@ -45,25 +32,23 @@ public:
         tps.AddWarpedPoint(src, diff);
     }
 
-    void UpdateSurface()
+    template<typename T>
+    void ApplyToSurface(Heightmap<T>& heightmap)
     {
         if(surface_samples.size() > 0) {
             tps.Solve();
-            for(size_t y=0; y < surface.surface.rows(); ++y) {
-                for(size_t x=0; x < surface.surface.cols(); ++x) {
-                    Eigen::Vector3f& S = surface.surface(y,x);
+            for(size_t y=0; y < heightmap.surface.rows(); ++y) {
+                for(size_t x=0; x < heightmap.surface.cols(); ++x) {
+                    auto& S = heightmap.surface(y,x);
                     const Eigen::Vector3d src(S[0],S[1],0.0);
-                    const Eigen::Vector3d diff = tps.Interpolate(src);
-                    S[2] = 0.0 + diff[2];
+                    S[2] = 0.0 + tps.SurfaceOffset(src);
                 }
             }
         }else{
-            surface.Clear();
+            heightmap.Clear();
         }
     }
 
-    Eigen::AlignedBox3d bounds;
-    Heightmap<float> surface;
     aligned_vector<Eigen::Vector3d> surface_samples;
     ThinPlateSpline tps;
 };

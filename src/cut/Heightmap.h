@@ -25,18 +25,20 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     Heightmap()
-        : max_pixels(2000*2000), tool(3.2, 8.0)
+        : max_pixels(0), tool(3.2, 8.0)
     {
     }
 
-    Heightmap(const Eigen::AlignedBox<T,3>& bounds_mm)
-        : max_pixels(2000*2000), tool(3.2, 8.0)
+    Heightmap(const Eigen::AlignedBox<T,3>& bounds_mm, size_t max_pixels)
+        : max_pixels(max_pixels), tool(3.2, 8.0)
     {
         Init(bounds_mm);
     }
 
-    void Init(const Eigen::AlignedBox<T,3>& bounds_mm)
+    void Init(const Eigen::AlignedBox<T,3>& bounds_mm, size_t max_pixels)
     {
+        this->max_pixels = max_pixels;
+
         const float border = 0.01;
         bbox_mm = bounds_mm;
         if(bbox_mm.isEmpty()) {
@@ -141,7 +143,7 @@ public:
         return surface(p[1],p[0])[2];
     }
 
-    uint64_t max_pixels;
+    size_t max_pixels;
     T res_per_mm;
     Eigen::AlignedBox<T,3> bbox_mm;
     Eigen::Matrix<Eigen::Matrix<T,3,1>,Eigen::Dynamic,Eigen::Dynamic> surface;

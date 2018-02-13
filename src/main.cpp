@@ -41,7 +41,8 @@ int main( int argc, char** argv )
             { "file",    {"-f", "--file"},    "Input gcode program filename", 1},
             { "machine", {"-m", "--machine"}, "CNC Machine serial port device", 1},
             { "samples", {"-s", "--samples"}, "Number of samples per mm for simulation", 1},
-            { "wco",     {"--wco"},           "Work Coordinate Offset - specify the origin of the work system", 1}
+            { "wco",     {"--wco"},           "Work Coordinate Offset - specify the origin of the work system", 1},
+            { "vsamples",{"--vertex-samples"}, "Maximum number of vertices to use for displaying the surface", 1}
     }};
 
     argagg::parser_results args;
@@ -62,6 +63,7 @@ int main( int argc, char** argv )
     const std::string gcode_filename = args["file"].as<std::string>("");
     const std::string grbl_serial = args["machine"].as<std::string>("");
     const size_t samples_per_mm = args["samples"].as<size_t>(10);
+    const size_t vertex_samples = args["vsamples"].as<size_t>(2000000);
 
     typedef float T;
 
@@ -80,18 +82,19 @@ int main( int argc, char** argv )
         }
     }
 
+    cnsee::GProgram current_prog;
     cnsee::GProgramExecution exec_work;
     cnsee::aligned_vector<Eigen::Vector3f> trajectory_machine;
 
 
     cnsee::ScannedSurface scanned_surface;
-    cnsee::Heightmap<T>& heightmap = scanned_surface.surface;
+    cnsee::Heightmap<T> heightmap;
     std::mutex surface_update_mutex;
 
     auto updated_wco = [&](){
         // Recompute bounds in machine coordinates
         const Eigen::AlignedBox3d bounds_machine = Eigen::AlignedBox3d(exec_work.bounds_mm).translate(machine.wco);
-        scanned_surface.ResetBounds(bounds_machine);
+        heightmap.Init(bounds_machine.cast<float>(), vertex_samples);
         trajectory_machine.clear();
         const cnsee::aligned_vector<Eigen::Vector3f> trajectory_work = exec_work.GenerateUpsampledTrajectory(samples_per_mm);
         for(const auto& p_w : trajectory_work) {
@@ -100,6 +103,7 @@ int main( int argc, char** argv )
     };
 
     auto use_program = [&](const cnsee::GProgram& prog){
+        current_prog = prog;
         exec_work.Clear();
         exec_work.ExecuteProgram(prog);
         updated_wco();
@@ -166,7 +170,7 @@ int main( int argc, char** argv )
     auto mill = [&]() {
         {
             std::unique_lock<std::mutex> l(surface_update_mutex);
-            scanned_surface.UpdateSurface();
+            scanned_surface.ApplyToSurface(heightmap);
         }
         mill_abort = false;
         for(const Eigen::Matrix<T,3,1>& p_m : trajectory_machine) {
@@ -185,6 +189,7 @@ int main( int argc, char** argv )
     };
 
     pangolin::Var<double> cut_time("tool.cut_time", 0.0, 0.0, exec_work.TotalTime_s());
+    pangolin::Var<int> cmd_queue_size("tool.cmd_queue_size", 0.0);
 
     pangolin::Var<bool> show_trajectory("tool.show_trajectory", true, true);
     pangolin::Var<bool> show_surface("tool.show_surface", true, true);
@@ -223,12 +228,19 @@ int main( int argc, char** argv )
     pangolin::Var<std::function<void(void)>>("tool.ClearProbedSurface", [&](){
         std::unique_lock<std::mutex> l(surface_update_mutex);
         scanned_surface.Clear();
+        heightmap.Clear();
     });
     pangolin::Var<std::function<void(void)>>("tool.TransformGCode", [&](){
         const cnsee::GProgram orig_program = cnsee::TokenizeProgram(gcode_filename);
         cnsee::GProgram zprog = cnsee::GTransformOffsetZ(orig_program, machine, scanned_surface.tps);
         use_program(zprog);
         mill_in_thread();
+    });
+    pangolin::Var<std::function<void(void)>>("tool.ExecuteProgram", [&](){
+        for(const auto& line : current_prog.lines) {
+            const std::string cmd = pangolin::Convert<std::string,cnsee::GLine>::Do(line);
+            machine.QueueCommand(cmd);
+        }
     });
 
     std::deque<std::future<void>> probes;
@@ -246,7 +258,11 @@ int main( int argc, char** argv )
         pangolin::RegisterKeyPressCallback('o', [&](){ machine.QueueCommand(FormatString("$J=G91G21Z%F%\n",+zstep,feedrate));});
         pangolin::RegisterKeyPressCallback('l', [&](){ machine.QueueCommand(FormatString("$J=G91G21Z%F%\n",-zstep,feedrate));});
         pangolin::RegisterKeyPressCallback('x', [&](){ machine.QueueCommand("$X\n");});
-        pangolin::RegisterKeyPressCallback(' ', [&](){ machine.QueueCommand("\x85");});
+        pangolin::RegisterKeyPressCallback(' ', [&](){
+            // Abort commands in command queue and abort those received by the machine.
+            machine.ClearCommandQueue();
+            machine.QueueCommand("\x85");
+        });
 
         pangolin::RegisterKeyPressCallback('p',  [&](){
             // Try to limit the async futures that build up.
@@ -277,6 +293,8 @@ int main( int argc, char** argv )
     size_t frame = 0;
     while( !pangolin::ShouldQuit() )
     {
+        cmd_queue_size = machine.NumberOfCommandsInQueue();
+
         // Clear screen and activate view to render into
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         d_cam.Activate(s_cam);

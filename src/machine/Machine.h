@@ -12,7 +12,8 @@ namespace cnsee {
 enum class AckStatus {
     Ack,
     NoOp,
-    Failed
+    Failed,
+    Aborted
 };
 
 enum class JobStatus {
@@ -56,10 +57,6 @@ public:
 
     // Queue GCode line
     virtual std::future<AckStatus> QueueCommand(const std::string& gcode_line) = 0;
-
-    // Execute the gcode program
-    // returns a shared progress object which can be used to query the programs state
-    virtual const std::shared_ptr<JobProgress> QueueProgram(const GProgram& program) = 0;
 
     virtual std::future<ProbeResult> ProbeSurface(const Eigen::Vector3d& probe_direction, double feed_rate) = 0;
 
