@@ -37,11 +37,12 @@ namespace cnsee
         }
     }
 
-    inline const char* ConsumeFloat(char const* start, char const* end, float& f)
+    template<typename T>
+    inline const char* ConsumeFloat(char const* start, char const* end, T& f)
     {
-        float s = 1;
-        float v = 0;
-        float dec = 0;
+        T s = 1;
+        T v = 0;
+        T dec = 0;
 
         int c = *start;
         while( start != end && (std::isdigit(c) || c == '.' || c == '-' || c == '+' ) )
@@ -53,7 +54,7 @@ namespace cnsee
             }else if( c=='.') {
                 dec = 1;
             }else{
-                const float d = float(c - '0');
+                const T d = T(c - '0');
                 v = 10.0f*v + d;
                 if(dec) dec *= 10;
             }
@@ -65,11 +66,11 @@ namespace cnsee
         return start;
     }
 
-    inline float ConsumeFloat(std::istream &is)
+    inline double ConsumeFloat(std::istream &is)
     {
-        float s = 1;
-        float v = 0;
-        float dec = 0;
+        double s = 1;
+        double v = 0;
+        double dec = 0;
 
         int c = is.peek();
         while(is.good() && (std::isdigit(c) || c == '.' || c == '-' || c == '+' ) )
@@ -81,9 +82,9 @@ namespace cnsee
             }else if( c=='.') {
                 dec = 1;
             }else{
-                const float d = float(c - '0');
-                v = 10.0f*v + d;
-                if(dec) dec *= 10;
+                const double d = double(c - '0');
+                v = 10.0*v + d;
+                if(dec) dec *= 10.0;
             }
             is.get();
             c = is.peek();

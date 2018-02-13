@@ -12,10 +12,17 @@ namespace cnsee {
 
 class ThinPlateSpline {
 public:
+    ThinPlateSpline()
+        : dirty(false)
+    {
+    }
+
     void Solve()
     {
-        if (mSrcPoints.size() != mDstPoints.size()) {
-            assert(false);
+        assert(mSrcPoints.size() == mDstPoints.size());
+
+        if(!dirty) {
+            return;
         }
 
         const int num(int(mSrcPoints.size()));
@@ -53,27 +60,33 @@ public:
 
         // Solve L W^T = Y as W^T = L^-1 Y
         mW = mL.colPivHouseholderQr().solve(Y);
+
+        dirty = false;
     }
 
     Eigen::Vector3d Interpolate(const Eigen::Vector3d &p) const
     {
-        Eigen::Vector3d res = Eigen::Vector3d::Zero();
-        int i(0);
+        if(NumPoints() > 0) {
+            Eigen::Vector3d res = Eigen::Vector3d::Zero();
+            int i(0);
 
-        for (; i < mW.rows() - (3 + 1); ++i)
-        {
-            double rb = radialBasis((mSrcPoints[std::size_t(i)] - p).norm());
-            res += mW.row(i) * rb;
+            for (; i < mW.rows() - (3 + 1); ++i)
+            {
+                double rb = radialBasis((mSrcPoints[std::size_t(i)] - p).norm());
+                res += mW.row(i) * rb;
+            }
+
+            res += mW.row(i);
+            i++;
+
+            for (int j(0); j < 3; ++j, ++i) {
+                res += mW.row(i) * p[j];
+            }
+
+            return res;
+        }else{
+            return p;
         }
-
-        res += mW.row(i);
-        i++;
-
-        for (int j(0); j < 3; ++j, ++i) {
-            res += mW.row(i) * p[j];
-        }
-
-        return res;
     }
 
     void Clear()
@@ -86,6 +99,25 @@ public:
     {
         mSrcPoints.push_back(src);
         mDstPoints.push_back(dst);
+        dirty = true;
+    }
+
+    size_t NumPoints() const
+    {
+        return mSrcPoints.size();
+    }
+
+    bool IsSolutionOutdated() const
+    {
+        return dirty;
+    }
+
+    template<typename Derived>
+    typename Derived::Scalar SurfaceOffset(const Eigen::MatrixBase<Derived>& P) const
+    {
+        const Eigen::Vector3d src(P[0], P[1], 0.0);
+        const Eigen::Vector3d diff = Interpolate(src);
+        return diff[2];
     }
 
 protected:
@@ -93,7 +125,7 @@ protected:
         return r == 0.0 ? r : r * r * log(r);
     }
 
-    /* Data */
+    bool dirty;
     std::vector<Eigen::Vector3d> mSrcPoints;
     std::vector<Eigen::Vector3d> mDstPoints;
     Eigen::MatrixXd mW;

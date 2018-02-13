@@ -26,30 +26,38 @@ inline GLine TokenizeLine(const std::string& str, int line_number)
             ++bracket;
         }else if(c==')') {
             --bracket;
-        }else if(bracket > 0) {
+        }else if(bracket > 0 || std::isspace(c)) {
             // ignore input
         }else if(c=='%' || c=='#' || c=='*') {
             // Treat checksums '*..' like end of line comments!
-            continue;
-        }else if(std::isspace(c)) {
-            if(token.letter) {
-                // Add token to line
-                line.tokens.push_back(token);
-                token.letter = 0;
-            }
+            break;
         }else {
             if(std::isdigit(c) || c == '-' || c == '.') {
+                if(!token.letter) {
+                    std::cerr << "Received number before charector when parsing token. Ignoring line " << line_number << std::endl;
+                    line.tokens.clear();
+                    return line;
+                }
                 const char* s = line.raw_line.c_str() + i;
                 const char* e = s + line.raw_line.length() - i;
                 const char* fe = ConsumeFloat(s, e, token.number);
                 i+= fe-s-1;
-            }else if(token.letter){
-                // start new token
-                line.tokens.push_back(token);
-                token.letter = (char)c;
             }else{
-                // Set letter for next token
+                // We have received the start of a new symbol
+                if(token.letter){
+                    if(std::isfinite(token.number)) {
+                        // Push the completed previous token
+                        line.tokens.push_back(token);
+                    }else{
+                        // The previous token was incomplete
+                        std::cerr << "Incomplete token '" << token.letter << "'. Ignoring line " << line_number << std::endl;
+                        line.tokens.clear();
+                        return line;
+                    }
+                }
+                // start new token
                 token.letter = (char)c;
+                token.number = std::numeric_limits<float>::quiet_NaN();
             }
         }
     }

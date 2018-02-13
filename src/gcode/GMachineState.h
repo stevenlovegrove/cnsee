@@ -52,8 +52,8 @@ struct GMachineState
           plane(GXY),
           feed_rate(100),
           tool_offset(-1),
-          P_w(0.0f,0.0f,0.0f,0.0f),
-          active_cmd(Cmd::RapidLinearMove),
+          P_w(0.0,0.0,0.0),
+          active_cmd(Cmd::None),
           spindle_cw(0),
           spindle_speed(0),
           time_s(0.0f),
@@ -66,16 +66,16 @@ struct GMachineState
     GFeedUnit feed_unit;
     GCoordinates coords;
     GPlane plane;
-    float feed_rate;
+    double feed_rate;
     int tool_offset;
-    Eigen::Vector4f P_w;
+    Eigen::Vector3d P_w;
     GCodeId active_cmd;
     int spindle_cw;
-    float spindle_speed;
+    double spindle_speed;
 
     // Meta information
-    float time_s;
-    float distance_travelled;
+    double time_s;
+    double distance_travelled;
 };
 
 }

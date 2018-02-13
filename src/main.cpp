@@ -7,6 +7,7 @@
 #include "machine/ScannedSurface.h"
 #include "gcode/GProgramExecution.h"
 #include "cut/Heightmap.h"
+#include "gcode/GTransformOffsetZ.h"
 
 template<typename T>
 void ComputeNormals(
@@ -39,7 +40,8 @@ int main( int argc, char** argv )
             { "help",    {"-h", "--help"},    "Shows this help message", 0},
             { "file",    {"-f", "--file"},    "Input gcode program filename", 1},
             { "machine", {"-m", "--machine"}, "CNC Machine serial port device", 1},
-            { "samples", {"-s", "--samples"}, "Number of samples per mm for simulation", 1}
+            { "samples", {"-s", "--samples"}, "Number of samples per mm for simulation", 1},
+            { "wco",     {"--wco"},           "Work Coordinate Offset - specify the origin of the work system", 1}
     }};
 
     argagg::parser_results args;
@@ -66,6 +68,10 @@ int main( int argc, char** argv )
     // CNC Machine
     cnsee::GrblMachine machine;
 
+    // default to these before even connecting so
+    machine.wco = pangolin::Convert<Eigen::Vector3d,std::string>::Do(args["wco"].as<std::string>("0,0,0"));
+    machine.mpos = machine.MachineFromWorkCoords(machine.wpos);
+
     if(!grbl_serial.empty()) {
         try{
             machine.Open(grbl_serial);
@@ -75,11 +81,8 @@ int main( int argc, char** argv )
     }
 
     cnsee::GProgramExecution exec_work;
-    if(!gcode_filename.empty()) {
-        exec_work.ExecuteProgram(cnsee::TokenizeProgram(gcode_filename));
-    }
-    const cnsee::aligned_vector<Eigen::Vector3f> trajectory_work = exec_work.GenerateUpsampledTrajectory(samples_per_mm);
     cnsee::aligned_vector<Eigen::Vector3f> trajectory_machine;
+
 
     cnsee::ScannedSurface scanned_surface;
     cnsee::Heightmap<T>& heightmap = scanned_surface.surface;
@@ -87,16 +90,43 @@ int main( int argc, char** argv )
 
     auto updated_wco = [&](){
         // Recompute bounds in machine coordinates
-        Eigen::AlignedBox3f bounds_machine = exec_work.bounds_mm;
-        bounds_machine.translate(machine.wco.cast<float>());
-        trajectory_machine.clear();
-        for(const auto& p : trajectory_work) {
-            trajectory_machine.push_back(p + machine.wco.cast<float>());
-        }
+        const Eigen::AlignedBox3d bounds_machine = Eigen::AlignedBox3d(exec_work.bounds_mm).translate(machine.wco);
         scanned_surface.ResetBounds(bounds_machine);
+        trajectory_machine.clear();
+        const cnsee::aligned_vector<Eigen::Vector3f> trajectory_work = exec_work.GenerateUpsampledTrajectory(samples_per_mm);
+        for(const auto& p_w : trajectory_work) {
+            trajectory_machine.push_back( machine.MachineFromWorkCoords(p_w.cast<double>()).cast<float>() );
+        }
     };
 
-    updated_wco();
+    auto use_program = [&](const cnsee::GProgram& prog){
+        exec_work.Clear();
+        exec_work.ExecuteProgram(prog);
+        updated_wco();
+    };
+
+    auto load_surface = [&](const std::string& filename){
+        std::ifstream ifs(filename);
+        while(ifs.good()) {
+            Eigen::Vector3d p;
+            if(ifs >> p) scanned_surface.AddSurfacePoint(p);
+        }
+    };
+    auto save_surface = [&](const std::string& filename){
+        std::ofstream ofs(filename);
+        if(ofs.good()) {
+            for(const auto& p : scanned_surface.surface_samples) {
+                ofs << pangolin::FormatString("%,%,%",p[0],p[1],p[2]) << std::endl;
+            }
+        }
+    };
+
+    load_surface("surface.txt");
+
+    if(!gcode_filename.empty()) {
+        const cnsee::GProgram orig_program = cnsee::TokenizeProgram(gcode_filename);
+        use_program(orig_program);
+    }
 
     pangolin::CreateWindowAndBind("Main",640,480);
     glEnable(GL_DEPTH_TEST);
@@ -104,7 +134,7 @@ int main( int argc, char** argv )
     // Define Projection and initial ModelView matrix
     pangolin::OpenGlRenderState s_cam(
         pangolin::ProjectionMatrix(640,480,420,420,320,240,0.1,1000),
-        pangolin::ModelViewLookAt(0,0,100, 0,0,0, pangolin::AxisY)
+        pangolin::ModelViewLookAt(machine.mpos[0],machine.mpos[1],200, machine.mpos[0],machine.mpos[1],0, pangolin::AxisY)
     );
     
     // Create Interactive View in window
@@ -129,9 +159,6 @@ int main( int argc, char** argv )
     norm_shader.AddShaderFromFile(pangolin::GlSlFragmentShader, shaders_dir + std::string("/matcap.frag"));
     norm_shader.Link();
 
-    std::cout << "(" << exec_work.bounds_mm.min().transpose() << ") - (" << exec_work.bounds_mm.max().transpose() << ") mm." << std::endl;
-    std::cout << heightmap.surface.rows() << " x " << heightmap.surface.cols() << " px." << std::endl;
-
     std::thread mill_thread;
     bool mill_changed = false;
     bool mill_abort = false;
@@ -142,8 +169,8 @@ int main( int argc, char** argv )
             scanned_surface.UpdateSurface();
         }
         mill_abort = false;
-        for(const Eigen::Matrix<T,3,1>& p_w : trajectory_machine) {
-            heightmap.MillSquare(p_w);
+        for(const Eigen::Matrix<T,3,1>& p_m : trajectory_machine) {
+            heightmap.MillSquare(p_m);
             mill_changed = true;
             if(mill_abort) break;
         }
@@ -157,7 +184,7 @@ int main( int argc, char** argv )
         mill_thread = std::thread(mill);
     };
 
-    pangolin::Var<float> cut_time("tool.cut_time", 0.0, 0.0, exec_work.TotalTime_s());
+    pangolin::Var<double> cut_time("tool.cut_time", 0.0, 0.0, exec_work.TotalTime_s());
 
     pangolin::Var<bool> show_trajectory("tool.show_trajectory", true, true);
     pangolin::Var<bool> show_surface("tool.show_surface", true, true);
@@ -165,9 +192,9 @@ int main( int argc, char** argv )
     pangolin::Var<bool> show_live_endmill("tool.show_endmill", true, true);
     pangolin::Var<bool> show_scanned_points("tool.show_scanned", true, true);
 
-    pangolin::Var<float> tool_tip_width_mm("tool.diameter_mm", 0.6, 0.01, 5.0);
-    pangolin::Var<float> tool_tip_height_mm("tool.height_mm", 8.0, 0.0, 10.0);
-    pangolin::Var<float> tool_v_angle_deg("tool.v_angle_deg", 40, 0.0, 100.0);
+    pangolin::Var<double> tool_tip_width_mm("tool.diameter_mm", 0.6, 0.01, 5.0);
+    pangolin::Var<double> tool_tip_height_mm("tool.height_mm", 8.0, 0.0, 10.0);
+    pangolin::Var<double> tool_v_angle_deg("tool.v_angle_deg", 40, 0.0, 100.0);
 
     pangolin::Var<double>::Attach("tool.Machine X", machine.mpos[0]);
     pangolin::Var<double>::Attach("tool.Machine Y", machine.mpos[1]);
@@ -175,6 +202,10 @@ int main( int argc, char** argv )
     pangolin::Var<double>::Attach("tool.Work X", machine.wpos[0]);
     pangolin::Var<double>::Attach("tool.Work Y", machine.wpos[1]);
     pangolin::Var<double>::Attach("tool.Work Z", machine.wpos[2]);
+
+    pangolin::Var<std::function<void(void)>>("tool.HomeMachine", [&](){
+        machine.QueueCommand("$H\n");
+    });
     pangolin::Var<std::function<void(void)>>("tool.ResetXY", [&](){
         machine.QueueCommand("G10L20P1X0Y0\n").get();
         machine.QueueCommand("?\n").get();
@@ -189,8 +220,18 @@ int main( int argc, char** argv )
         updated_wco();
         mill_in_thread();
     });
+    pangolin::Var<std::function<void(void)>>("tool.ClearProbedSurface", [&](){
+        std::unique_lock<std::mutex> l(surface_update_mutex);
+        scanned_surface.Clear();
+    });
+    pangolin::Var<std::function<void(void)>>("tool.TransformGCode", [&](){
+        const cnsee::GProgram orig_program = cnsee::TokenizeProgram(gcode_filename);
+        cnsee::GProgram zprog = cnsee::GTransformOffsetZ(orig_program, machine, scanned_surface.tps);
+        use_program(zprog);
+        mill_in_thread();
+    });
 
-    std::vector<std::future<void>> probes;
+    std::deque<std::future<void>> probes;
 
     {
         using namespace pangolin;
@@ -208,18 +249,25 @@ int main( int argc, char** argv )
         pangolin::RegisterKeyPressCallback(' ', [&](){ machine.QueueCommand("\x85");});
 
         pangolin::RegisterKeyPressCallback('p',  [&](){
+            // Try to limit the async futures that build up.
+            while(probes.size() && probes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+                probes.pop_front();
+            }
+
             auto a = std::async(std::launch::async, [&](){
-                auto promise = machine.ProbeSurface(Eigen::Vector3f(0,0,-10), 50);
+                auto promise = machine.ProbeSurface(Eigen::Vector3d(0,0,-10), 50);
 //                machine.QueueCommand(FormatString("$J=G91G21Z%F%\n",5,feedrate));
                 cnsee::ProbeResult probe = promise.get();
                 if(probe.contact_made) {
                     std::cout << "Probe succeeded: " << probe.contact_point.transpose() << std::endl;
                     std::unique_lock<std::mutex> l(surface_update_mutex);
                     scanned_surface.AddSurfacePoint(probe.contact_point);
+                    save_surface("surface.txt");
                 }else{
                     std::cerr << "Probe failed. " << std::endl;
                 }
             });
+
             probes.push_back(std::move(a));
         });
     }
@@ -250,7 +298,11 @@ int main( int argc, char** argv )
             // Compute Normals
             mill_changed = false;
             ComputeNormals(heightmap.normals, heightmap.surface);
+
+            // create a new buffer as the length of the trajectory may have changed.
+            trajectory_vbo = pangolin::GlBuffer(pangolin::GlArrayBuffer, trajectory_machine.size(), GL_FLOAT, 3);
             trajectory_vbo.Upload(&trajectory_machine[0][0], trajectory_machine.size() * sizeof(T) * 3 );
+
             surface_vbo.Upload(&heightmap.surface(0,0)[0], heightmap.surface.rows() * heightmap.surface.cols() * sizeof(T) * 3);
             surface_nbo.Upload(&heightmap.normals(0,0)[0], heightmap.normals.rows() * heightmap.normals.cols() * sizeof(T) * 3);
         }
@@ -284,7 +336,7 @@ int main( int argc, char** argv )
         // Show simulated cutting head position
         {
             glPushMatrix();
-            const Eigen::Vector3f mpos = exec_work.GetP_wAtTime(cut_time).head<3>();
+            const Eigen::Vector3d mpos = machine.MachineFromWorkCoords(exec_work.GetP_wAtTime(cut_time));
             glTranslated(mpos[0],mpos[1],mpos[2]);
             pangolin::glDrawAxis(1.0);
             glPopMatrix();
@@ -299,10 +351,8 @@ int main( int argc, char** argv )
             glPointSize(1.0);
         }
 
-//        if(frame%6 == 0)
-        {
-            machine.RequestStatus();
-        }
+        // Poll the CNC machine for status
+        machine.RequestStatus();
 
         ++frame;
         pangolin::FinishFrame();

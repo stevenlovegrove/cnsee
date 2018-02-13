@@ -8,15 +8,15 @@
 namespace cnsee {
 
 void ApplyGCode(GMachineState& state, const GLine& line) {
-    auto SetOrdinate = [&](float &ordinate, float val)
+    auto SetOrdinate = [&](double &ordinate, double val)
     {
         ordinate = ( state.coords == GCoordinatesAbsolute) ? val : ordinate + val;
     };
 
     size_t line_num = line.line_number;
-    Eigen::Vector4f new_P_w = state.P_w;
-    float feedrate = state.feed_rate;
-    float dwell_ms = 0.0f;
+    Eigen::Vector3d new_P_w = state.P_w;
+    double feedrate = state.feed_rate;
+    double dwell_ms = 0.0;
 
     for(const GToken& t : line.tokens) {
         if(t.letter == 'N') {
@@ -80,10 +80,10 @@ void ApplyGCode(GMachineState& state, const GLine& line) {
     }
 
     // Compute duration of move
-    const float distance = (new_P_w - state.P_w).norm();
-    float line_time_s = 0;
+    const double distance = (new_P_w - state.P_w).norm();
+    double line_time_s = 0;
     if(state.feed_unit == GFeedUnitsPerTime) {
-        const float time_m = distance / feedrate;
+        const double time_m = distance / feedrate;
         line_time_s = time_m * 60;
     }else if(state.feed_unit == GFeedDuration) {
         line_time_s = feedrate;
@@ -125,12 +125,19 @@ public:
         Clear();
     }
 
+    GProgramExecution(const GProgram& program, const GMachineState& starting_state = GMachineState() )
+    {
+        state_vec.push_back(starting_state);
+        Clear();
+        ExecuteProgram(program);
+    }
+
     void Clear()
     {
         // Keep starting state
         state_vec.resize(1);
         bounds_mm.setEmpty();
-        bounds_mm.extend(state_vec[0].P_w.head<3>());
+        bounds_mm.extend(state_vec[0].P_w);
     }
 
     void ExecuteProgram(const GProgram& program)
@@ -139,7 +146,7 @@ public:
             // Copy state and evolve
             state_vec.push_back(state_vec.back());
             ApplyGCode(state_vec.back(), l);
-            bounds_mm.extend(state_vec.back().P_w.head<3>());
+            bounds_mm.extend(state_vec.back().P_w);
         }
     }
 
@@ -153,7 +160,7 @@ public:
         return state_vec.back().time_s;
     }
 
-    Eigen::Vector4f GetP_wAtTime(float time_s) const
+    Eigen::Vector3d GetP_wAtTime(float time_s) const
     {
         GMachineState s;
         s.time_s = time_s;
@@ -170,14 +177,14 @@ public:
             // lerp between lb-1 and lb
             const GMachineState& p = state_vec[lb-1];
             const GMachineState& n = state_vec[lb];
-            const float lambda = (time_s - p.time_s) / (n.time_s - p.time_s);
-            return (1.0f - lambda) * p.P_w + lambda * n.P_w;
+            const double lambda = (time_s - p.time_s) / (n.time_s - p.time_s);
+            return (1.0 - lambda) * p.P_w + lambda * n.P_w;
         }else{
             return state_vec.back().P_w;
         }
     }
 
-    Eigen::Vector4f GetP_wAtDistance(float distance_travelled) const
+    Eigen::Vector3d GetP_wAtDistance(float distance_travelled) const
     {
         GMachineState s;
         s.distance_travelled = distance_travelled;
@@ -194,27 +201,27 @@ public:
             // lerp between lb-1 and lb
             const GMachineState& p = state_vec[lb-1];
             const GMachineState& n = state_vec[lb];
-            const float lambda = (distance_travelled - p.distance_travelled) / (n.distance_travelled - p.distance_travelled);
-            return (1.0f - lambda) * p.P_w + lambda * n.P_w;
+            const double lambda = (distance_travelled - p.distance_travelled) / (n.distance_travelled - p.distance_travelled);
+            return (1.0 - lambda) * p.P_w + lambda * n.P_w;
         }else{
             return state_vec.back().P_w;
         }
     }
 
-    aligned_vector<Eigen::Vector3f> GenerateUpsampledTrajectory(float samples_per_unit)
+    aligned_vector<Eigen::Vector3f> GenerateUpsampledTrajectory(double samples_per_unit)
     {
         aligned_vector<Eigen::Vector3f> trajectory;
 
         const GMachineState* p = &state_vec[0];
         for(const GMachineState& n : state_vec)
         {
-            const float dist = (n.P_w - p->P_w).norm();
+            const double dist = (n.P_w - p->P_w).norm();
             if(dist > 0.0) {
                 const int samples = std::max(2, (int) std::ceil(dist * samples_per_unit));
                 for (int s = 0; s < samples; ++s) {
-                    const float lambda = (float)s / (float)samples;
-                    const Eigen::Vector3f P_w = ((1 - lambda) * p->P_w + lambda * n.P_w).head<3>();
-                    trajectory.push_back(P_w);
+                    const double lambda = (double)s / (double)samples;
+                    const Eigen::Vector3d P_w = ((1.0 - lambda) * p->P_w + lambda * n.P_w);
+                    trajectory.push_back(P_w.cast<float>());
                 }
             }
 
@@ -225,7 +232,7 @@ public:
     }
 
     aligned_vector<GMachineState> state_vec;
-    Eigen::AlignedBox<float,3> bounds_mm;
+    Eigen::AlignedBox3d bounds_mm;
 };
 
 }

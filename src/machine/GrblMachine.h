@@ -31,6 +31,10 @@ namespace cnsee {
                   read_buffer_parse_end(read_buffer_parse_start),
                   status(MachineStatus::Disconnected),
                   cmd_size_outstanding(0),
+                  wpos(Eigen::Vector3d::Zero()),
+                  mpos(Eigen::Vector3d::Zero()),
+                  wco (Eigen::Vector3d::Zero()),
+                  feed_speed(Eigen::Vector2d::Zero()),
                   probe_contact(false)
         {
         }
@@ -67,6 +71,16 @@ namespace cnsee {
             write_thread = std::thread(&GrblMachine::WriteLoop, this);
         }
 
+        Eigen::Vector3d MachineFromWorkCoords(const Eigen::Vector3d& P_w) const
+        {
+            return P_w + wco;
+        }
+
+        Eigen::Vector3d WorkFromMachineCoords(const Eigen::Vector3d& P_m) const
+        {
+            return P_m - wco;
+        }
+
         ////////////////////////////////////////////////////////////////////////////////
         // Implement MachineInterface
         ////////////////////////////////////////////////////////////////////////////////
@@ -92,7 +106,7 @@ namespace cnsee {
             throw std::runtime_error("Not implemented");
         }
 
-        std::future<ProbeResult> ProbeSurface(const Eigen::Vector3f& dir, float feed_rate) override {
+        std::future<ProbeResult> ProbeSurface(const Eigen::Vector3d& dir, double feed_rate) override {
             std::future<ProbeResult> f;
             {
                 std::unique_lock<std::mutex> l(queue_mutex);
@@ -152,11 +166,11 @@ namespace cnsee {
         };
 
         struct PromisedProbe{
-            PromisedProbe(const Eigen::Vector3f& dir): probe_direction(dir) {}
+            PromisedProbe(const Eigen::Vector3d& dir): probe_direction(dir) {}
             PromisedProbe(PromisedProbe&&) = default;
 
             EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-            Eigen::Vector3f probe_direction;
+            Eigen::Vector3d probe_direction;
             std::promise<ProbeResult> promise;
         };
 
@@ -298,7 +312,7 @@ namespace cnsee {
                 if(b != end) {
                     char* e = std::find(b+1,end,':');
                     if(e != end) {
-                        result.contact_point = pangolin::Convert<Eigen::Vector3f,std::string>::Do(std::string(b+1,e));
+                        result.contact_point = pangolin::Convert<Eigen::Vector3d,std::string>::Do(std::string(b+1,e));
                         char* ee = std::find(e+1,end,']');
                         if(ee != end) {
                             result.contact_made = e[1] == '1';
