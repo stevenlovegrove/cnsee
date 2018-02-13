@@ -76,14 +76,16 @@ namespace cnsee {
             return queued_commands.size();
         }
 
-        Eigen::Vector3d MachineFromWorkCoords(const Eigen::Vector3d& P_w) const
+        template<typename Derived>
+        typename Eigen::Matrix<typename Derived::Scalar,3,1> MachineFromWorkCoords(const Eigen::MatrixBase<Derived>& P_w) const
         {
-            return P_w + wco;
+            return P_w + wco.template cast<typename Derived::Scalar>();
         }
 
-        Eigen::Vector3d WorkFromMachineCoords(const Eigen::Vector3d& P_m) const
+        template<typename Derived>
+        typename Eigen::Matrix<typename Derived::Scalar,3,1> WorkFromMachineCoords(const Eigen::MatrixBase<Derived>& P_m) const
         {
-            return P_m - wco;
+            return P_m - wco.template cast<typename Derived::Scalar>();
         }
 
         ////////////////////////////////////////////////////////////////////////////////

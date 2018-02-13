@@ -84,7 +84,7 @@ int main( int argc, char** argv )
 
     cnsee::GProgram current_prog;
     cnsee::GProgramExecution exec_work;
-    cnsee::aligned_vector<Eigen::Vector3f> trajectory_machine;
+    cnsee::aligned_vector<Eigen::Matrix<T,3,1>> trajectory_machine;
 
 
     cnsee::ScannedSurface scanned_surface;
@@ -94,11 +94,11 @@ int main( int argc, char** argv )
     auto updated_wco = [&](){
         // Recompute bounds in machine coordinates
         const Eigen::AlignedBox3d bounds_machine = Eigen::AlignedBox3d(exec_work.bounds_mm).translate(machine.wco);
-        heightmap.Init(bounds_machine.cast<float>(), vertex_samples);
+        heightmap.Init(bounds_machine.cast<T>(), vertex_samples);
         trajectory_machine.clear();
-        const cnsee::aligned_vector<Eigen::Vector3f> trajectory_work = exec_work.GenerateUpsampledTrajectory(samples_per_mm);
+        const auto trajectory_work = exec_work.GenerateUpsampledTrajectory<T>(samples_per_mm);
         for(const auto& p_w : trajectory_work) {
-            trajectory_machine.push_back( machine.MachineFromWorkCoords(p_w.cast<double>()).cast<float>() );
+            trajectory_machine.push_back( machine.MachineFromWorkCoords(p_w) );
         }
     };
 

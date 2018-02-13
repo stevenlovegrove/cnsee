@@ -208,9 +208,10 @@ public:
         }
     }
 
-    aligned_vector<Eigen::Vector3f> GenerateUpsampledTrajectory(double samples_per_unit)
+    template<typename T>
+    aligned_vector<Eigen::Matrix<T,3,1>> GenerateUpsampledTrajectory(double samples_per_unit)
     {
-        aligned_vector<Eigen::Vector3f> trajectory;
+        aligned_vector<Eigen::Matrix<T,3,1>> trajectory;
 
         const GMachineState* p = &state_vec[0];
         for(const GMachineState& n : state_vec)
@@ -221,7 +222,7 @@ public:
                 for (int s = 0; s < samples; ++s) {
                     const double lambda = (double)s / (double)samples;
                     const Eigen::Vector3d P_w = ((1.0 - lambda) * p->P_w + lambda * n.P_w);
-                    trajectory.push_back(P_w.cast<float>());
+                    trajectory.push_back(P_w.cast<T>());
                 }
             }
 
