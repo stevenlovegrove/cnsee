@@ -7,19 +7,32 @@
 #include <Eigen/QR>
 #include <Eigen/StdVector>
 
+#include "../cut/Heightmap.h"
+#include "../utils/aligned_vector.h"
+
 namespace cnsee {
 
 
 class ThinPlateSpline {
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
     ThinPlateSpline()
         : dirty(false)
     {
     }
 
+    void Clear()
+    {
+        mSrcPoints.clear();
+        mSrcDiff.clear();
+        mSamples.clear();
+        dirty = true;
+    }
+
     void Solve()
     {
-        assert(mSrcPoints.size() == mDstPoints.size());
+        assert(mSrcPoints.size() == mSrcDiff.size());
 
         if(!dirty) {
             return;
@@ -55,7 +68,7 @@ public:
 
         for (size_t i = 0; i < num; ++i)
         {
-            Y.row(i) = mDstPoints[i];
+            Y.row(i) = mSrcDiff[i];
         }
 
         // Solve L W^T = Y as W^T = L^-1 Y
@@ -92,20 +105,43 @@ public:
         }
     }
 
-    void AddWarpedPoint(const Eigen::Vector3d& src, const Eigen::Vector3d& dst)
+    void AddSurfacePoint(const Eigen::Vector3d& P)
     {
+        const Eigen::Vector3d src(P[0], P[1], 0.0);
+        const Eigen::Vector3d diff(0.0, 0.0, P[2]);
+        mSamples.push_back(P);
         mSrcPoints.push_back(TransformUnits(src));
-        mDstPoints.push_back(dst);
+        mSrcDiff.push_back(diff);
         dirty = true;
     }
 
-    void Clear()
+    template<typename T>
+    void ApplyToSurface(Heightmap<T>& heightmap)
     {
-        mSrcPoints.clear();
-        mDstPoints.clear();
-        dirty = true;
+        if(mSamples.size() > 0) {
+            Solve();
+            for(size_t y=0; y < heightmap.surface.rows(); ++y) {
+                for(size_t x=0; x < heightmap.surface.cols(); ++x) {
+                    auto& S = heightmap.surface(y,x);
+                    const Eigen::Vector3d src(S[0],S[1],0.0);
+                    S[2] = 0.0 + SurfaceOffset(src);
+                }
+            }
+        }else{
+            heightmap.Clear();
+        }
     }
 
+    void OffsetEntireSurface(double z)
+    {
+        for(auto& p : mSrcDiff) {
+            p[2] += z;
+        }
+        for(auto& p : mSamples) {
+            p[2] += z;
+        }
+        dirty = true;
+    }
 
     size_t NumPoints() const
     {
@@ -115,6 +151,11 @@ public:
     bool IsSolutionOutdated() const
     {
         return dirty;
+    }
+
+    const std::vector<Eigen::Vector3d>& Samples() const
+    {
+        return mSamples;
     }
 
     template<typename Derived>
@@ -139,7 +180,8 @@ protected:
 
     bool dirty;
     std::vector<Eigen::Vector3d> mSrcPoints;
-    std::vector<Eigen::Vector3d> mDstPoints;
+    std::vector<Eigen::Vector3d> mSrcDiff;
+    std::vector<Eigen::Vector3d> mSamples;
     Eigen::MatrixXd mW;
 };
 

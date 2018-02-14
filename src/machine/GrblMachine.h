@@ -37,6 +37,8 @@ namespace cnsee {
                   feed_speed(Eigen::Vector2d::Zero()),
                   probe_contact(false)
         {
+            status_period = std::chrono::milliseconds(30);
+            last_status = std::chrono::system_clock::now() - std::chrono::hours(1);
         }
 
         ~GrblMachine() {
@@ -74,6 +76,11 @@ namespace cnsee {
         size_t NumberOfCommandsInQueue() const
         {
             return queued_commands.size();
+        }
+
+        size_t NumberOfCommandsUnacked() const
+        {
+            return unacked_commands.size();
         }
 
         template<typename Derived>
@@ -153,10 +160,10 @@ namespace cnsee {
 
         void RequestStatus()
         {
-            // Only request status updates when we're connected and there aren't too many requests pending.
-            if(IsConnected() && cmd_size_outstanding < 20) {
-                QueueCommand("?\n");
-            }
+//            // Only request status updates when we're connected and there aren't too many requests pending.
+//            if(IsConnected() && cmd_size_outstanding < 20) {
+//                QueueCommand("?\n");
+//            }
         }
 
         ////////////////////////////////////////////////////////////////////////////////
@@ -192,9 +199,7 @@ namespace cnsee {
 
         // Send gcode directly over wire
         void SendLine(const char *gcode, size_t size) {
-            if(size != 2) {
-                std::cout << "Sending: " << std::string(gcode,size) << std::flush;
-            }
+//            std::cout << "Sending: " << std::string(gcode,size) << std::flush;
 
             if(size > GRBL_RX_BUFFER_SIZE) {
                 throw std::runtime_error("Command is greater than max allowable line size (GRBL_RX_BUFFER_SIZE)");
@@ -203,6 +208,7 @@ namespace cnsee {
             // TODO: Use condition variable.
             // Busy-wait whilst buffer is full.
             while(size > GrblBufferAvailable()) {
+                MaybeSendStatusRequest();
             }
 
             cmd_size_outstanding += size;
@@ -356,7 +362,7 @@ namespace cnsee {
                     std::cerr << "Error executing command, '" << std::string(start, end) << "'" << std::endl;
                     ReceivedAck(AckStatus::Failed);
                 } else if (size >= 5 && !strncmp(start, "ALARM", 5)) {
-                    std::cout << std::string(start, end) << std::endl;
+                    std::cerr << "ALARM Received: '" << std::string(start, end) << "'" << std::endl;
                 } else if (start[0] == '\r' || start[0] == '\n') {
                     ParseLine(start+1, end);
                 } else {
@@ -405,22 +411,37 @@ namespace cnsee {
             }
         }
 
+        // IMPORTANT: This must only be called from the single write thread
+        void MaybeSendStatusRequest()
+        {
+            // Jump the queue
+            if(std::chrono::system_clock::now() - last_status > status_period) {
+                const unsigned char req = '?';
+                serial.Write(&req, 1);
+                last_status = std::chrono::system_clock::now();
+            }
+        }
+
         void WriteLoop() {
+
             while(should_run) {
                 {
-                    std::unique_lock<std::mutex> l(queue_mutex);
-                    while(queued_commands.empty()) {
-                        queue_changed_cond.wait(l);
-                        if(!should_run) return;
-                    }
-                    const std::string cmd = queued_commands.front().cmd;
-//                    if(cmd.length() && cmd[0] != '?') {
+                    std::string next_cmd;
+                    {
+                        std::unique_lock<std::mutex> l(queue_mutex);
+
+                        while(queued_commands.empty()) {
+                            queue_changed_cond.wait_for(l, status_period);
+                            if(!should_run) return;
+                            MaybeSendStatusRequest();
+                        }
+
+                        next_cmd = queued_commands.front().cmd;
                         unacked_commands.push_back(std::move(queued_commands.front()));
-//                    }else{
-//                        queued_commands.front().promise.set_value(AckStatus::NoOp);
-//                    }
-                    queued_commands.pop_front();
-                    SendLine(cmd);
+                        queued_commands.pop_front();
+                    }
+
+                    SendLine(next_cmd);
                 }
             }
         }
@@ -459,6 +480,9 @@ namespace cnsee {
             std::shared_ptr<JobProgress> progrss;
         };
         std::stack<ProgramAndProgress> queued_programs;
+
+        std::chrono::milliseconds status_period;
+        std::chrono::system_clock::time_point last_status;
     };
 
 }

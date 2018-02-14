@@ -18,6 +18,9 @@ struct Tool
     T height;
 };
 
+template<typename T, int Dim>
+using Line = Eigen::Matrix<T,Dim,2>;
+
 template<typename T>
 class Heightmap
 {
@@ -70,6 +73,12 @@ public:
             }
         }
     }
+
+//    template<typename P>
+//    P Cut(const Eigen::Matrix<P,3,1>& sample, const Line<P,3>& path, const P tool_rad)
+//    {
+//        // We want to subtract the cylinder tool path from the sample
+//    }
 
     void MillSquare(const Eigen::Matrix<T, 3, 1> &p_w)
     {

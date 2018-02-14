@@ -4,7 +4,7 @@
 #include <pangolin/utils/argagg.hpp>
 
 #include "machine/GrblMachine.h"
-#include "machine/ScannedSurface.h"
+#include "thinplate/ThinPlateSpline.hpp"
 #include "gcode/GProgramExecution.h"
 #include "cut/Heightmap.h"
 #include "gcode/GTransformOffsetZ.h"
@@ -87,7 +87,7 @@ int main( int argc, char** argv )
     cnsee::aligned_vector<Eigen::Matrix<T,3,1>> trajectory_machine;
 
 
-    cnsee::ScannedSurface scanned_surface;
+    cnsee::ThinPlateSpline scanned_surface;
     cnsee::Heightmap<T> heightmap;
     std::mutex surface_update_mutex;
 
@@ -119,7 +119,7 @@ int main( int argc, char** argv )
     auto save_surface = [&](const std::string& filename){
         std::ofstream ofs(filename);
         if(ofs.good()) {
-            for(const auto& p : scanned_surface.surface_samples) {
+            for(const auto& p : scanned_surface.Samples()) {
                 ofs << pangolin::FormatString("%,%,%",p[0],p[1],p[2]) << std::endl;
             }
         }
@@ -167,6 +167,14 @@ int main( int argc, char** argv )
     bool mill_changed = false;
     bool mill_abort = false;
 
+    std::deque<std::future<void>> probes;
+    auto cleanup_finished_probes = [&](){
+        // Try to limit the async futures that build up.
+        while(probes.size() && probes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            probes.pop_front();
+        }
+    };
+
     auto mill = [&]() {
         {
             std::unique_lock<std::mutex> l(surface_update_mutex);
@@ -190,6 +198,7 @@ int main( int argc, char** argv )
 
     pangolin::Var<double> cut_time("tool.cut_time", 0.0, 0.0, exec_work.TotalTime_s());
     pangolin::Var<int> cmd_queue_size("tool.cmd_queue_size", 0.0);
+    pangolin::Var<int> cmd_pending_size("tool.cmd_pending_size", 0.0);
 
     pangolin::Var<bool> show_trajectory("tool.show_trajectory", true, true);
     pangolin::Var<bool> show_surface("tool.show_surface", true, true);
@@ -225,6 +234,26 @@ int main( int argc, char** argv )
         updated_wco();
         mill_in_thread();
     });
+    pangolin::Var<std::function<void(void)>>("tool.ProbeAndSetZ", [&](){
+        auto a = std::async(std::launch::async, [&](){
+            auto promise = machine.ProbeSurface(Eigen::Vector3d(0,0,-10), 50);
+            cnsee::ProbeResult probe = promise.get();
+            if(probe.contact_made) {
+                // Our probe and surface should agree (to account for changed tool, for e.g.
+                const double curr_surface = scanned_surface.SurfaceOffset(probe.contact_point);
+                const double new_surface = probe.contact_point[2];
+                scanned_surface.OffsetEntireSurface(new_surface - curr_surface);
+                mill_in_thread();
+            }else{
+                std::cerr << "Probe failed. " << std::endl;
+            }
+        });
+
+        probes.push_back(std::move(a));
+    });
+    pangolin::Var<std::function<void(void)>>("tool.GoToXY0", [&](){
+        machine.QueueCommand("$J=G90G21X0Y0F2000\n");
+    });
     pangolin::Var<std::function<void(void)>>("tool.ClearProbedSurface", [&](){
         std::unique_lock<std::mutex> l(surface_update_mutex);
         scanned_surface.Clear();
@@ -232,7 +261,7 @@ int main( int argc, char** argv )
     });
     pangolin::Var<std::function<void(void)>>("tool.TransformGCode", [&](){
         const cnsee::GProgram orig_program = cnsee::TokenizeProgram(gcode_filename);
-        cnsee::GProgram zprog = cnsee::GTransformOffsetZ(orig_program, machine, scanned_surface.tps);
+        cnsee::GProgram zprog = cnsee::GTransformOffsetZ(orig_program, machine, scanned_surface);
         use_program(zprog);
         mill_in_thread();
     });
@@ -243,7 +272,6 @@ int main( int argc, char** argv )
         }
     });
 
-    std::deque<std::future<void>> probes;
 
     {
         using namespace pangolin;
@@ -261,14 +289,11 @@ int main( int argc, char** argv )
         pangolin::RegisterKeyPressCallback(' ', [&](){
             // Abort commands in command queue and abort those received by the machine.
             machine.ClearCommandQueue();
-            machine.QueueCommand("\x85");
+            machine.QueueCommand("\x85\n");
         });
 
         pangolin::RegisterKeyPressCallback('p',  [&](){
-            // Try to limit the async futures that build up.
-            while(probes.size() && probes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                probes.pop_front();
-            }
+            cleanup_finished_probes();
 
             auto a = std::async(std::launch::async, [&](){
                 auto promise = machine.ProbeSurface(Eigen::Vector3d(0,0,-10), 50);
@@ -294,6 +319,7 @@ int main( int argc, char** argv )
     while( !pangolin::ShouldQuit() )
     {
         cmd_queue_size = machine.NumberOfCommandsInQueue();
+        cmd_pending_size = machine.NumberOfCommandsUnacked();
 
         // Clear screen and activate view to render into
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -365,7 +391,7 @@ int main( int argc, char** argv )
             std::unique_lock<std::mutex> l(surface_update_mutex);
             glPointSize(3.0);
             glColor3f(0.0,1.0,0.0);
-            pangolin::glDrawPoints(scanned_surface.surface_samples);
+            pangolin::glDrawPoints(scanned_surface.Samples());
             glPointSize(1.0);
         }
 
