@@ -209,6 +209,26 @@ public:
     }
 
     template<typename T>
+    aligned_vector<Eigen::Matrix<T,3,1>> GenerateTrajectory()
+    {
+        aligned_vector<Eigen::Matrix<T,3,1>> trajectory;
+
+        const GMachineState* p = &state_vec[0];
+        trajectory.push_back(p->P_w.cast<T>());
+
+        for(size_t i=1; i < state_vec.size(); ++i) {
+            const GMachineState& n = state_vec[i];
+            const double dist = (n.P_w - p->P_w).norm();
+            if(dist > 0.0) {
+                trajectory.push_back(n.P_w.cast<T>());
+            }
+        }
+
+        return trajectory;
+    }
+
+
+    template<typename T>
     aligned_vector<Eigen::Matrix<T,3,1>> GenerateUpsampledTrajectory(double samples_per_unit)
     {
         aligned_vector<Eigen::Matrix<T,3,1>> trajectory;

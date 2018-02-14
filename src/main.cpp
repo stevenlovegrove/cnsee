@@ -93,10 +93,13 @@ int main( int argc, char** argv )
 
     auto updated_wco = [&](){
         // Recompute bounds in machine coordinates
-        const Eigen::AlignedBox3d bounds_machine = Eigen::AlignedBox3d(exec_work.bounds_mm).translate(machine.wco);
+        const Eigen::AlignedBox2d bounds_machine = Eigen::AlignedBox2d(
+                exec_work.bounds_mm.min().head<2>(),
+                exec_work.bounds_mm.max().head<2>()
+        ).translate(machine.wco.head<2>());
         heightmap.Init(bounds_machine.cast<T>(), vertex_samples);
         trajectory_machine.clear();
-        const auto trajectory_work = exec_work.GenerateUpsampledTrajectory<T>(samples_per_mm);
+        const auto trajectory_work = exec_work.GenerateTrajectory<T>();
         for(const auto& p_w : trajectory_work) {
             trajectory_machine.push_back( machine.MachineFromWorkCoords(p_w) );
         }
@@ -181,8 +184,12 @@ int main( int argc, char** argv )
             scanned_surface.ApplyToSurface(heightmap);
         }
         mill_abort = false;
-        for(const Eigen::Matrix<T,3,1>& p_m : trajectory_machine) {
-            heightmap.MillSquare(p_m);
+        for(size_t i=1; i < trajectory_machine.size(); ++i) {
+            Eigen::Matrix<T,3,2> line;
+            line.col(0) = trajectory_machine[i-1];
+            line.col(1) = trajectory_machine[i];
+            heightmap.MillSquare<T>(line, heightmap.tool.diameter/2.0f);
+
             mill_changed = true;
             if(mill_abort) break;
         }
